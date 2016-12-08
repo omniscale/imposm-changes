@@ -27,6 +27,7 @@ func New() {
 	nextDiff := diffDl.Sequences()
 	nextChange := changeDl.Sequences()
 
+	filter := &BboxFilter{5, 50, 10, 55}
 	for {
 		if err := db.Begin(); err != nil {
 			log.Fatal(err)
@@ -49,6 +50,9 @@ func New() {
 				if err != nil {
 					log.Fatal(err)
 				}
+				if filter.FilterElement(elem) {
+					continue
+				}
 				if err := db.ImportElem(elem); err != nil {
 					log.Println(err)
 				}
@@ -69,5 +73,17 @@ func New() {
 			log.Fatal(err)
 		}
 	}
+}
 
+type BboxFilter struct {
+	Minx, Miny, Maxx, Maxy float64
+}
+
+func (b *BboxFilter) FilterElement(elem diff.Element) bool {
+	if elem.Node != nil {
+		if elem.Node.Long < b.Minx || elem.Node.Long > b.Maxx || elem.Node.Lat < b.Miny || elem.Node.Lat > b.Maxy {
+			return true
+		}
+	}
+	return false
 }
