@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/omniscale/imposm3/element"
 	"github.com/omniscale/imposm3/parser/changeset"
@@ -23,7 +24,7 @@ var initSql = []string{
     geometry GEOMETRY(Point, 4326),
     user_name VARCHAR,
     user_id INT,
-    timestamp TIMESTAMP,
+    timestamp TIMESTAMP WITH TIME ZONE,
     version INT,
     tags HSTORE,
     PRIMARY KEY (id, version)
@@ -36,7 +37,7 @@ var initSql = []string{
     changeset INT,
     user_name VARCHAR,
     user_id INT,
-    timestamp TIMESTAMP,
+    timestamp TIMESTAMP WITH TIME ZONE,
     version INT,
     tags HSTORE,
     PRIMARY KEY (id, version)
@@ -61,7 +62,7 @@ var initSql = []string{
     geometry GEOMETRY(Point, 4326),
     user_name VARCHAR,
     user_id INT,
-    timestamp TIMESTAMP,
+    timestamp TIMESTAMP WITH TIME ZONE,
     version INT,
     tags HSTORE,
     PRIMARY KEY (id, version)
@@ -82,8 +83,8 @@ var initSql = []string{
 );`,
 	`CREATE TABLE IF NOT EXISTS "%[1]s".changesets (
     id INT NOT NULL,
-    created_at TIMESTAMP,
-    closed_at TIMESTAMP,
+    created_at TIMESTAMP WITH TIME ZONE,
+    closed_at TIMESTAMP WITH TIME ZONE,
     num_changes INT,
     open BOOLEAN,
     user_name VARCHAR,
@@ -97,7 +98,7 @@ var initSql = []string{
     idx INT,
     user_name VARCHAR,
     user_id INT,
-    timestamp TIMESTAMP,
+    timestamp TIMESTAMP WITH TIME ZONE,
     text VARCHAR,
     PRIMARY KEY (changeset_id, idx),
     FOREIGN KEY (changeset_id)
@@ -347,7 +348,7 @@ func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 			nd.Long, nd.Lat,
 			nd.Metadata.UserName,
 			nd.Metadata.UserId,
-			nd.Metadata.Timestamp,
+			nd.Metadata.Timestamp.UTC(),
 			nd.Metadata.Version,
 			nd.Metadata.Changeset,
 			hstoreString(nd.Tags),
@@ -363,7 +364,7 @@ func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 			del,
 			w.Metadata.UserName,
 			w.Metadata.UserId,
-			w.Metadata.Timestamp,
+			w.Metadata.Timestamp.UTC(),
 			w.Metadata.Version,
 			w.Metadata.Changeset,
 			hstoreString(w.Tags),
@@ -389,7 +390,7 @@ func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 			del,
 			rel.Metadata.UserName,
 			rel.Metadata.UserId,
-			rel.Metadata.Timestamp,
+			rel.Metadata.Timestamp.UTC(),
 			rel.Metadata.Version,
 			rel.Metadata.Changeset,
 			hstoreString(rel.Tags),
@@ -429,10 +430,16 @@ func (p *PostGIS) ImportChangeset(c changeset.Changeset) error {
 	if _, err := p.tx.Exec("SAVEPOINT insert_changeset"); err != nil {
 		return err
 	}
+	// insert null if closedAt isZero
+	var closedAt *time.Time
+	if !c.ClosedAt.IsZero() {
+		closedUtc := c.ClosedAt.UTC()
+		closedAt = &closedUtc
+	}
 	if _, err := p.changeStmt.Exec(
 		c.Id,
-		c.CreatedAt.Time,
-		c.ClosedAt.Time,
+		c.CreatedAt.UTC(),
+		closedAt,
 		c.Open,
 		c.NumChanges,
 		c.User,
@@ -445,8 +452,8 @@ func (p *PostGIS) ImportChangeset(c changeset.Changeset) error {
 		}
 		if _, err := p.changeUpdateStmt.Exec(
 			c.Id,
-			c.CreatedAt.Time,
-			c.ClosedAt.Time,
+			c.CreatedAt.UTC(),
+			closedAt,
 			c.Open,
 			c.NumChanges,
 			c.User,
@@ -467,7 +474,7 @@ func (p *PostGIS) ImportChangeset(c changeset.Changeset) error {
 			i,
 			com.User,
 			com.UserId,
-			com.Date.Time,
+			com.Date.UTC(),
 			com.Text,
 		); err != nil {
 			return newSqlError(err, c)
