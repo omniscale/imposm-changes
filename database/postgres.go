@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/omniscale/osm-changetracker/changeset"
-
-	"github.com/omniscale/imposm3/diff/parser"
 	"github.com/omniscale/imposm3/element"
+	"github.com/omniscale/imposm3/parser/changeset"
+	"github.com/omniscale/imposm3/parser/diff"
 
 	_ "github.com/lib/pq"
 )
@@ -127,30 +126,52 @@ func NewPostGIS(params string, schema string) (*PostGIS, error) {
 	if err != nil {
 		return nil, err
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return nil, err
-	}
+
 	if schema == "" {
 		schema = "public"
 	}
 
 	return &PostGIS{
 		db:     db,
-		tx:     tx,
 		schema: schema,
 	}, nil
 }
 
+func newSqlError(err error, elem interface{}) error {
+	return &sqlError{elem: elem, err: err}
+}
+
+type sqlError struct {
+	elem interface{}
+	err  error
+}
+
+func (s *sqlError) Error() string {
+	return fmt.Sprintf("error: %s; for %#v", s.err, s.elem)
+
+}
+
 func (p *PostGIS) Init() error {
+	tx, err := p.db.Begin()
+	if err != nil {
+		return err
+	}
 	for _, s := range initSql {
 		stmt := fmt.Sprintf(s, p.schema)
-		fmt.Println(stmt)
-		if _, err := p.tx.Exec(stmt); err != nil {
+		if _, err := tx.Exec(stmt); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("error while calling %v: %v", stmt, err)
 		}
 	}
+	return tx.Commit()
+}
 
+func (p *PostGIS) Begin() error {
+	var err error
+	p.tx, err = p.db.Begin()
+	if err != nil {
+		return err
+	}
 	nodeStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`INSERT INTO "%[1]s".nodes (
             id,
@@ -295,7 +316,7 @@ func (p *PostGIS) Commit() error {
 	return p.tx.Commit()
 }
 
-func (p *PostGIS) Import(elem parser.DiffElem) (err error) {
+func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 	_, err = p.tx.Exec("SAVEPOINT insert")
 	if err != nil {
 		return
@@ -318,7 +339,7 @@ func (p *PostGIS) Import(elem parser.DiffElem) (err error) {
 	}
 	if elem.Node != nil {
 		nd := elem.Node
-		_, err = p.nodeStmt.Exec(
+		if _, err = p.nodeStmt.Exec(
 			nd.Id,
 			add,
 			mod,
@@ -330,8 +351,9 @@ func (p *PostGIS) Import(elem parser.DiffElem) (err error) {
 			nd.Metadata.Version,
 			nd.Metadata.Changeset,
 			hstoreString(nd.Tags),
-		)
-		return
+		); err != nil {
+			return newSqlError(err, elem.Node)
+		}
 	} else if elem.Way != nil {
 		w := elem.Way
 		if _, err = p.wayStmt.Exec(
@@ -346,7 +368,7 @@ func (p *PostGIS) Import(elem parser.DiffElem) (err error) {
 			w.Metadata.Changeset,
 			hstoreString(w.Tags),
 		); err != nil {
-			return
+			return newSqlError(err, elem.Way)
 		}
 		for i, ref := range elem.Way.Refs {
 			if _, err = p.ndsStmt.Exec(
@@ -355,7 +377,7 @@ func (p *PostGIS) Import(elem parser.DiffElem) (err error) {
 				i,
 				ref,
 			); err != nil {
-				return
+				return newSqlError(err, elem.Way)
 			}
 		}
 	} else if elem.Rel != nil {
@@ -372,7 +394,7 @@ func (p *PostGIS) Import(elem parser.DiffElem) (err error) {
 			rel.Metadata.Changeset,
 			hstoreString(rel.Tags),
 		); err != nil {
-			return
+			return newSqlError(err, elem.Rel)
 		}
 		for i, m := range elem.Rel.Members {
 			var nodeId, wayId, relId interface{}
@@ -394,16 +416,15 @@ func (p *PostGIS) Import(elem parser.DiffElem) (err error) {
 				wayId,
 				relId,
 			); err != nil {
-				return
+				return newSqlError(err, elem.Rel)
 			}
 		}
-
 	}
 
 	return nil
 }
 
-func (p *PostGIS) Changeset(c changeset.Changeset) error {
+func (p *PostGIS) ImportChangeset(c changeset.Changeset) error {
 	bbox := bboxPolygon(c)
 	if _, err := p.tx.Exec("SAVEPOINT insert_changeset"); err != nil {
 		return err
@@ -433,7 +454,7 @@ func (p *PostGIS) Changeset(c changeset.Changeset) error {
 			bbox,
 			hstoreStringChangeset(c.Tags),
 		); err != nil {
-			return err
+			return newSqlError(err, c)
 		}
 		if _, err := p.tx.Exec(fmt.Sprintf(`DELETE FROM "%[1]s".comments WHERE changeset_id = $1`, p.schema), c.Id); err != nil {
 			return err
@@ -449,7 +470,7 @@ func (p *PostGIS) Changeset(c changeset.Changeset) error {
 			com.Date.Time,
 			com.Text,
 		); err != nil {
-			return err
+			return newSqlError(err, c)
 		}
 	}
 
