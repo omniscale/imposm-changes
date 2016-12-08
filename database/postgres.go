@@ -42,6 +42,7 @@ var initSql = []string{
     tags HSTORE,
     PRIMARY KEY (id, version)
 );`,
+	`CREATE INDEX IF NOT EXISTS ways_changset_idx ON "%[1]s".ways USING btree (changeset);`,
 	`CREATE TABLE IF NOT EXISTS "%[1]s".nds (
     way_id INT NOT NULL,
     way_version INT NOT NULL,
@@ -67,6 +68,7 @@ var initSql = []string{
     tags HSTORE,
     PRIMARY KEY (id, version)
 );`,
+	`CREATE INDEX IF NOT EXISTS relations_changset_idx ON "%[1]s".relations USING btree (changeset);`,
 	`CREATE TABLE IF NOT EXISTS "%[1]s".members (
     relation_id INT NOT NULL,
     relation_version INT,
