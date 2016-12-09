@@ -3,6 +3,7 @@ package changetracker
 import (
 	"io"
 	"log"
+	"time"
 
 	"github.com/omniscale/imposm3/parser/changeset"
 	"github.com/omniscale/imposm3/parser/diff"
@@ -57,17 +58,20 @@ func Run(config *Config) error {
 
 	var filter func(diff.Element) bool
 	if config.LimitTo != nil {
-		bf := &BboxFilter{5, 50, 10, 55}
+		bf := &BboxFilter{config.LimitTo[0], config.LimitTo[1], config.LimitTo[2], config.LimitTo[3]}
 		filter = bf.FilterElement
 	}
-	for {
-		if err := db.Begin(); err != nil {
-			log.Fatal(err)
-		}
 
+	cleanupElem := time.Tick(5 * time.Minute)
+	cleanupChangsets := time.Tick(15 * time.Minute)
+
+	for {
 		select {
 		case seq := <-nextDiff:
-			log.Print(seq)
+			log.Printf("importing diff %s from %s", seq.Filename, seq.Time)
+			if err := db.Begin(); err != nil {
+				log.Fatal(err)
+			}
 			osc, err := diff.NewOscGzParser(seq.Filename)
 			if err != nil {
 				log.Fatal(err)
@@ -92,8 +96,14 @@ func Run(config *Config) error {
 			if err := db.SaveDiffStatus(seq.Sequence, seq.Time); err != nil {
 				log.Fatal(err)
 			}
+			if err := db.Commit(); err != nil {
+				log.Fatal(err)
+			}
 		case seq := <-nextChange:
-			log.Print(seq)
+			log.Printf("importing changeset %s from %s", seq.Filename, seq.Time)
+			if err := db.Begin(); err != nil {
+				log.Fatal(err)
+			}
 			changes, err := changeset.ParseAllOsmGz(seq.Filename)
 			if err != nil {
 				log.Fatal(err)
@@ -106,16 +116,27 @@ func Run(config *Config) error {
 			if err := db.SaveChangesetStatus(seq.Sequence, seq.Time); err != nil {
 				log.Fatal(err)
 			}
-		}
-		if err := db.Commit(); err != nil {
-			log.Fatal(err)
-		}
-
-		if config.LimitTo != nil {
-			if err := db.CleanupElements(*config.LimitTo); err != nil {
+			if err := db.Commit(); err != nil {
 				log.Fatal(err)
 			}
+		case <-cleanupElem:
+			// cleanup ways/relations outside of limitto (based on extent of the changesets)
+			if config.LimitTo != nil {
+				log.Printf("cleaning up elements")
+				if err := db.CleanupElements(*config.LimitTo); err != nil {
+					log.Fatal(err)
+				}
+			}
+		case <-cleanupChangsets:
+			// cleanup closed changesets outside of limitto
+			if config.LimitTo != nil {
+				log.Printf("cleaning up changesets")
+				if err := db.CleanupChangesets(*config.LimitTo, 24*time.Hour); err != nil {
+					log.Fatal(err)
+				}
+			}
 		}
+
 	}
 
 	return nil
