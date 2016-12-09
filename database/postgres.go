@@ -154,20 +154,6 @@ func NewPostGIS(connection string, schema string) (*PostGIS, error) {
 	}, nil
 }
 
-func newSqlError(err error, elem interface{}) error {
-	return &sqlError{elem: elem, err: err}
-}
-
-type sqlError struct {
-	elem interface{}
-	err  error
-}
-
-func (s *sqlError) Error() string {
-	return fmt.Sprintf("error: %s; for %#v", s.err, s.elem)
-
-}
-
 func (p *PostGIS) Init() error {
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -369,7 +355,7 @@ DELETE FROM "%[1]s".%[2]s WHERE changeset IN (`+changesetsStmt+`)`,
 		r, err := tx.Exec(stmt, bbox[0], bbox[1], bbox[2], bbox[3])
 		if err != nil {
 			tx.Rollback()
-			return newSqlError(err, stmt)
+			return errors.Wrap(err, "cleanup elements")
 		}
 		rows, err := r.RowsAffected()
 		if err != nil {
@@ -396,7 +382,7 @@ AND NOT (bbox && ST_MakeEnvelope($1, $2, $3, $4))
 	r, err := tx.Exec(stmt, bbox[0], bbox[1], bbox[2], bbox[3], before)
 	if err != nil {
 		tx.Rollback()
-		return newSqlError(err, stmt)
+		return errors.Wrap(err, "cleanup changesets")
 	}
 	rows, err := r.RowsAffected()
 	if err != nil {
@@ -443,7 +429,7 @@ func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 			nd.Metadata.Changeset,
 			hstoreString(nd.Tags),
 		); err != nil {
-			return newSqlError(err, elem.Node)
+			return errors.Wrapf(err, "importing node %v", elem.Node)
 		}
 	} else if elem.Way != nil {
 		w := elem.Way
@@ -459,7 +445,7 @@ func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 			w.Metadata.Changeset,
 			hstoreString(w.Tags),
 		); err != nil {
-			return newSqlError(err, elem.Way)
+			return errors.Wrapf(err, "importing way %v", elem.Way)
 		}
 		for i, ref := range elem.Way.Refs {
 			if _, err = p.ndsStmt.Exec(
@@ -468,7 +454,7 @@ func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 				i,
 				ref,
 			); err != nil {
-				return newSqlError(err, elem.Way)
+				return errors.Wrapf(err, "importing nds %v of way %v", ref, elem.Way)
 			}
 		}
 	} else if elem.Rel != nil {
@@ -485,7 +471,7 @@ func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 			rel.Metadata.Changeset,
 			hstoreString(rel.Tags),
 		); err != nil {
-			return newSqlError(err, elem.Rel)
+			return errors.Wrapf(err, "importing relation %v", elem.Rel)
 		}
 		for i, m := range elem.Rel.Members {
 			var nodeId, wayId, relId interface{}
@@ -507,7 +493,7 @@ func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 				wayId,
 				relId,
 			); err != nil {
-				return newSqlError(err, elem.Rel)
+				return errors.Wrapf(err, "importing member %v of relation %v", m, elem.Rel)
 			}
 		}
 	}
@@ -589,10 +575,10 @@ func (p *PostGIS) ImportChangeset(c changeset.Changeset) error {
 			bbox,
 			hstoreStringChangeset(c.Tags),
 		); err != nil {
-			return newSqlError(err, c)
+			return errors.Wrapf(err, "updating changeset: %v", c)
 		}
 		if _, err := p.tx.Exec(fmt.Sprintf(`DELETE FROM "%[1]s".comments WHERE changeset_id = $1`, p.schema), c.Id); err != nil {
-			return err
+			return errors.Wrapf(err, "deleting comments of %v", c)
 		}
 	}
 
@@ -605,7 +591,7 @@ func (p *PostGIS) ImportChangeset(c changeset.Changeset) error {
 			com.Date.UTC(),
 			com.Text,
 		); err != nil {
-			return newSqlError(err, c)
+			return errors.Wrapf(err, "inserting comments for %v", c)
 		}
 	}
 

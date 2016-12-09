@@ -15,10 +15,10 @@ import (
 func Run(config *Config) error {
 	db, err := database.NewPostGIS(config.Connection, config.Schemas.Changes)
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "creating postgis connection")
 	}
 	if err := db.Init(); err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "init postgis changes database")
 	}
 
 	diffSeq, err := db.ReadDiffStatus()
@@ -70,11 +70,11 @@ func Run(config *Config) error {
 		case seq := <-nextDiff:
 			log.Printf("importing diff %s from %s", seq.Filename, seq.Time)
 			if err := db.Begin(); err != nil {
-				log.Fatal(err)
+				return errors.Wrap(err, "starting transaction")
 			}
 			osc, err := diff.NewOscGzParser(seq.Filename)
 			if err != nil {
-				log.Fatal(err)
+				return errors.Wrapf(err, "creating .osc.gz parser for %s", seq.Filename)
 			}
 			osc.SetWithMetadata(true)
 
@@ -84,7 +84,7 @@ func Run(config *Config) error {
 					break
 				}
 				if err != nil {
-					log.Fatal(err)
+					return errors.Wrapf(err, "parsing diff %s", seq.Filename)
 				}
 				if filter != nil && filter(elem) {
 					continue
@@ -94,37 +94,37 @@ func Run(config *Config) error {
 				}
 			}
 			if err := db.SaveDiffStatus(seq.Sequence, seq.Time); err != nil {
-				log.Fatal(err)
+				return errors.Wrap(err, "saving diff status")
 			}
 			if err := db.Commit(); err != nil {
-				log.Fatal(err)
+				return errors.Wrapf(err, "committing diff")
 			}
 		case seq := <-nextChange:
 			log.Printf("importing changeset %s from %s", seq.Filename, seq.Time)
 			if err := db.Begin(); err != nil {
-				log.Fatal(err)
+				return errors.Wrap(err, "starting transaction")
 			}
 			changes, err := changeset.ParseAllOsmGz(seq.Filename)
 			if err != nil {
-				log.Fatal(err)
+				return errors.Wrapf(err, "parsing changesets %s", seq.Filename)
 			}
 			for _, c := range changes {
 				if err := db.ImportChangeset(c); err != nil {
-					log.Fatal(err)
+					log.Println(err)
 				}
 			}
 			if err := db.SaveChangesetStatus(seq.Sequence, seq.Time); err != nil {
-				log.Fatal(err)
+				return errors.Wrapf(err, "saving changeset status")
 			}
 			if err := db.Commit(); err != nil {
-				log.Fatal(err)
+				return errors.Wrapf(err, "committing changeset")
 			}
 		case <-cleanupElem:
 			// cleanup ways/relations outside of limitto (based on extent of the changesets)
 			if config.LimitTo != nil {
 				log.Printf("cleaning up elements")
 				if err := db.CleanupElements(*config.LimitTo); err != nil {
-					log.Fatal(err)
+					return errors.Wrap(err, "cleaning up elements")
 				}
 			}
 		case <-cleanupChangsets:
@@ -132,7 +132,7 @@ func Run(config *Config) error {
 			if config.LimitTo != nil {
 				log.Printf("cleaning up changesets")
 				if err := db.CleanupChangesets(*config.LimitTo, 24*time.Hour); err != nil {
-					log.Fatal(err)
+					return errors.Wrap(err, "cleaning up changesets")
 				}
 			}
 		}
