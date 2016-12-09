@@ -3,16 +3,16 @@ package changetracker
 import (
 	"io"
 	"log"
-	"time"
 
 	"github.com/omniscale/imposm3/parser/changeset"
 	"github.com/omniscale/imposm3/parser/diff"
 	"github.com/omniscale/imposm3/replication"
 	"github.com/omniscale/osm-changetracker/database"
+	"github.com/pkg/errors"
 )
 
-func New() {
-	db, err := database.NewPostGIS("sslmode=disable", "changes")
+func Run(config *Config) error {
+	db, err := database.NewPostGIS(config.Connection, config.Schemas.Changes)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -20,14 +20,46 @@ func New() {
 		log.Fatal(err)
 	}
 
-	// diffDl := replication.NewDiffDownloader("diffs", "http://planet.openstreetmap.org/replication/minute/", 2138860, time.Minute)
-	diffDl := replication.NewDiffReader("diffs", 2138860)
-	changeDl := replication.NewChangesetDownloader("changes", "http://planet.openstreetmap.org/replication/changesets/", 2138860, time.Minute)
+	diffSeq, err := db.ReadDiffStatus()
+	if err != nil {
+		return errors.Wrap(err, "unable to read diff current status")
+	}
+	if diffSeq <= 0 {
+		diffSeq, err = replication.CurrentDiff(config.DiffUrl)
+		if err != nil {
+			errors.Wrapf(err, "unable to read current diff from %s", config.DiffUrl)
+		}
+		diffSeq -= int(config.InitialHistory.Duration / config.DiffInterval.Duration)
+	}
+	changeSeq, err := db.ReadChangesetStatus()
+	if err != nil {
+		return errors.Wrap(err, "unable to read changeset current status")
+	}
+	if changeSeq <= 0 {
+		changeSeq, err = replication.CurrentChangeset(config.ChangesetUrl)
+		if err != nil {
+			errors.Wrapf(err, "unable to read current changeset from %s", config.ChangesetUrl)
+		}
+		changeSeq -= int(config.InitialHistory.Duration / config.ChangesetInterval.Duration)
+	}
+
+	var diffDl replication.Source
+	if config.DiffFromDiffDir {
+		diffDl = replication.NewDiffReader(config.DiffDir, diffSeq)
+	} else {
+		diffDl = replication.NewDiffDownloader(config.DiffDir, config.DiffUrl, diffSeq, config.DiffInterval.Duration)
+	}
+
+	changeDl := replication.NewChangesetDownloader(config.ChangesDir, config.ChangesetUrl, changeSeq, config.ChangesetInterval.Duration)
 
 	nextDiff := diffDl.Sequences()
 	nextChange := changeDl.Sequences()
 
-	filter := &BboxFilter{5, 50, 10, 55}
+	var filter func(diff.Element) bool
+	if config.LimitTo != nil {
+		bf := &BboxFilter{5, 50, 10, 55}
+		filter = bf.FilterElement
+	}
 	for {
 		if err := db.Begin(); err != nil {
 			log.Fatal(err)
@@ -50,12 +82,15 @@ func New() {
 				if err != nil {
 					log.Fatal(err)
 				}
-				if filter.FilterElement(elem) {
+				if filter != nil && filter(elem) {
 					continue
 				}
 				if err := db.ImportElem(elem); err != nil {
 					log.Println(err)
 				}
+			}
+			if err := db.SaveDiffStatus(seq.Sequence, seq.Time); err != nil {
+				log.Fatal(err)
 			}
 		case seq := <-nextChange:
 			log.Print(seq)
@@ -68,11 +103,22 @@ func New() {
 					log.Fatal(err)
 				}
 			}
+			if err := db.SaveChangesetStatus(seq.Sequence, seq.Time); err != nil {
+				log.Fatal(err)
+			}
 		}
 		if err := db.Commit(); err != nil {
 			log.Fatal(err)
 		}
+
+		if config.LimitTo != nil {
+			if err := db.CleanupElements(*config.LimitTo); err != nil {
+				log.Fatal(err)
+			}
+		}
 	}
+
+	return nil
 }
 
 type BboxFilter struct {

@@ -3,18 +3,25 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
+	"github.com/pkg/errors"
 
 	"github.com/omniscale/imposm3/element"
 	"github.com/omniscale/imposm3/parser/changeset"
 	"github.com/omniscale/imposm3/parser/diff"
-
-	_ "github.com/lib/pq"
 )
 
 var initSql = []string{
 	`CREATE SCHEMA IF NOT EXISTS "%[1]s";`,
+	`CREATE TABLE IF NOT EXISTS "%[1]s".current_status (
+        type VARCHAR UNIQUE,
+        sequence INT,
+        timestamp TIMESTAMP WITH TIME ZONE
+);`,
 	`CREATE TABLE IF NOT EXISTS "%[1]s".nodes (
     id BIGINT,
     add BOOLEAN,
@@ -124,7 +131,14 @@ type PostGIS struct {
 	schema           string
 }
 
-func NewPostGIS(params string, schema string) (*PostGIS, error) {
+func NewPostGIS(connection string, schema string) (*PostGIS, error) {
+	if strings.HasPrefix(connection, "postgis") {
+		connection = strings.Replace(connection, "postgis", "postgres", 1)
+	}
+	params, err := pq.ParseURL(connection)
+	if err != nil {
+		return nil, errors.Wrapf(err, "unable to parse connection %s", connection)
+	}
 	db, err := sql.Open("postgres", params)
 	if err != nil {
 		return nil, err
@@ -164,6 +178,23 @@ func (p *PostGIS) Init() error {
 		if _, err := tx.Exec(stmt); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("error while calling %v: %v", stmt, err)
+		}
+	}
+
+	for _, statusType := range []string{"changes", "diff"} {
+		row := tx.QueryRow(
+			fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM "%[1]s".current_status WHERE type = '%[2]s')`, p.schema, statusType),
+		)
+		var exists bool
+		err := row.Scan(&exists)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := tx.Exec(
+				fmt.Sprintf(`INSERT INTO "%[1]s".current_status (type, sequence) VALUES ('%[2]s', -1)`, p.schema, statusType)); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()
@@ -319,6 +350,63 @@ func (p *PostGIS) Commit() error {
 	return p.tx.Commit()
 }
 
+func (p *PostGIS) CleanupElements(bbox [4]float64) error {
+	tx, err := p.db.Begin()
+	if err != nil {
+		return err
+	}
+
+	changesetsStmt := `
+SELECT id FROM "%[1]s".changesets
+WHERE NOT open
+AND NOT (bbox && ST_MakeEnvelope($1, $2, $3, $4))
+`
+	for _, table := range []string{"ways", "relations"} {
+		stmt := fmt.Sprintf(`
+DELETE FROM "%[1]s".%[2]s WHERE changeset IN (`+changesetsStmt+`)`,
+			p.schema, table,
+		)
+		r, err := tx.Exec(stmt, bbox[0], bbox[1], bbox[2], bbox[3])
+		if err != nil {
+			tx.Rollback()
+			return newSqlError(err, stmt)
+		}
+		rows, err := r.RowsAffected()
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		log.Printf("removed %d from %s", rows, table)
+	}
+	return tx.Commit()
+}
+
+func (p *PostGIS) CleanupChangesets(bbox [4]float64, olderThen time.Duration) error {
+	tx, err := p.db.Begin()
+	if err != nil {
+		return err
+	}
+	before := time.Now().Add(-olderThen).UTC()
+
+	stmt := `
+DELETE FROM "%[1]s".%[2]s
+WHERE closed_at < $5
+AND NOT (bbox && ST_MakeEnvelope($1, $2, $3, $4))
+`
+	r, err := tx.Exec(stmt, bbox[0], bbox[1], bbox[2], bbox[3], before)
+	if err != nil {
+		tx.Rollback()
+		return newSqlError(err, stmt)
+	}
+	rows, err := r.RowsAffected()
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	log.Printf("removed %d from changesets", rows)
+	return tx.Commit()
+}
+
 func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 	_, err = p.tx.Exec("SAVEPOINT insert")
 	if err != nil {
@@ -425,6 +513,44 @@ func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 	}
 
 	return nil
+}
+
+func (p *PostGIS) SaveChangesetStatus(sequence int, timestamp time.Time) error {
+	return p.saveStatus("changes", sequence, timestamp)
+}
+
+func (p *PostGIS) SaveDiffStatus(sequence int, timestamp time.Time) error {
+	return p.saveStatus("diff", sequence, timestamp)
+}
+
+func (p *PostGIS) saveStatus(statusType string, sequence int, timestamp time.Time) error {
+	_, err := p.tx.Exec(
+		fmt.Sprintf(
+			`UPDATE "%[1]s".current_status SET sequence = $1, timestamp = $2 WHERE type = '%[2]s'`,
+			p.schema, statusType,
+		), sequence, timestamp,
+	)
+	return err
+}
+
+func (p *PostGIS) ReadChangesetStatus() (int, error) {
+	return p.readStatus("changes")
+}
+
+func (p *PostGIS) ReadDiffStatus() (int, error) {
+	return p.readStatus("diff")
+}
+
+func (p *PostGIS) readStatus(statusType string) (int, error) {
+	row := p.db.QueryRow(
+		fmt.Sprintf(
+			`SELECT sequence FROM "%[1]s".current_status WHERE type = '%[2]s'`,
+			p.schema, statusType,
+		),
+	)
+	var sequence int
+	err := row.Scan(&sequence)
+	return sequence, err
 }
 
 func (p *PostGIS) ImportChangeset(c changeset.Changeset) error {
