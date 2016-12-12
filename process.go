@@ -62,8 +62,7 @@ func Run(config *Config) error {
 		filter = bf.FilterElement
 	}
 
-	cleanupElem := time.Tick(5 * time.Minute)
-	cleanupChangsets := time.Tick(15 * time.Minute)
+	cleanup := time.Tick(5 * time.Minute)
 
 	for {
 		select {
@@ -125,18 +124,16 @@ func Run(config *Config) error {
 				return errors.Wrapf(err, "committing changeset")
 			}
 			log.Printf("\timported %d changeset in %s", len(changes), time.Since(start))
-		case <-cleanupElem:
-			// cleanup ways/relations outside of limitto (based on extent of the changesets)
+		case <-cleanup:
 			if config.LimitTo != nil {
-				log.Printf("cleaning up elements")
+				log.Printf("cleaning up elements/changesets")
+				// Cleanup ways/relations outside of limitto (based on extent of the changesets)
+				// Do this before CleanupChangesets, to prevent ways/relations that have no
+				// changeset.
 				if err := db.CleanupElements(*config.LimitTo); err != nil {
 					return errors.Wrap(err, "cleaning up elements")
 				}
-			}
-		case <-cleanupChangsets:
-			// cleanup closed changesets outside of limitto
-			if config.LimitTo != nil {
-				log.Printf("cleaning up changesets")
+				// Cleanup closed changesets outside of limitto
 				if err := db.CleanupChangesets(*config.LimitTo, 24*time.Hour); err != nil {
 					return errors.Wrap(err, "cleaning up changesets")
 				}
