@@ -85,6 +85,7 @@ var initSql = []string{
     member_node_id BIGINT,
     member_way_id INT,
     member_relation_id INT,
+    PRIMARY KEY (relation_id, relation_version, idx),
     FOREIGN KEY (relation_id, relation_version)
         REFERENCES "%[1]s".relations (id, version)
           ON UPDATE CASCADE
