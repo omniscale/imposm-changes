@@ -375,11 +375,13 @@ func (p *PostGIS) CleanupChangesets(bbox [4]float64, olderThen time.Duration) er
 	}
 	before := time.Now().Add(-olderThen).UTC()
 
-	stmt := `
-DELETE FROM "%[1]s".%[2]s
+	stmt := fmt.Sprintf(`
+DELETE FROM "%[1]s".changesets
 WHERE closed_at < $5
 AND NOT (bbox && ST_MakeEnvelope($1, $2, $3, $4))
-`
+`,
+		p.schema,
+	)
 	r, err := tx.Exec(stmt, bbox[0], bbox[1], bbox[2], bbox[3], before)
 	if err != nil {
 		tx.Rollback()
