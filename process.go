@@ -69,6 +69,7 @@ func Run(config *Config) error {
 		select {
 		case seq := <-nextDiff:
 			log.Printf("importing diff %s from %s", seq.Filename, seq.Time)
+			start := time.Now()
 			if err := db.Begin(); err != nil {
 				return errors.Wrap(err, "starting transaction")
 			}
@@ -78,6 +79,7 @@ func Run(config *Config) error {
 			}
 			osc.SetWithMetadata(true)
 
+			numElements := 0
 			for {
 				elem, err := osc.Next()
 				if err == io.EOF {
@@ -89,6 +91,7 @@ func Run(config *Config) error {
 				if filter != nil && filter(elem) {
 					continue
 				}
+				numElements += 1
 				if err := db.ImportElem(elem); err != nil {
 					log.Println(err)
 				}
@@ -99,8 +102,10 @@ func Run(config *Config) error {
 			if err := db.Commit(); err != nil {
 				return errors.Wrapf(err, "committing diff")
 			}
+			log.Printf("\timported %d elements in %s", numElements, time.Since(start))
 		case seq := <-nextChange:
 			log.Printf("importing changeset %s from %s", seq.Filename, seq.Time)
+			start := time.Now()
 			if err := db.Begin(); err != nil {
 				return errors.Wrap(err, "starting transaction")
 			}
@@ -119,6 +124,7 @@ func Run(config *Config) error {
 			if err := db.Commit(); err != nil {
 				return errors.Wrapf(err, "committing changeset")
 			}
+			log.Printf("\timported %d changeset in %s", len(changes), time.Since(start))
 		case <-cleanupElem:
 			// cleanup ways/relations outside of limitto (based on extent of the changesets)
 			if config.LimitTo != nil {
