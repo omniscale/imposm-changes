@@ -14,6 +14,21 @@ You won't be able to construct the geometry of ways or relations if they were on
 You will typically use the ``limitto`` option to monitor a region/country extent. This allows you to monitor the changes of the last few weeks with moderate server requirements (only a few GB disk).
 
 
+Installation
+------------
+
+    go get -u github.com/omniscale/imposm-changes
+    go install github.com/omniscale/imposm-changes/cmd/imposm-changes
+
+Run
+---
+
+    mkdir imposm-changes
+    cd imposm-changes
+    cp $GOPATH/src/github.com/omniscale/imposm-changes/config.json ./
+    imposm-changes run -config config.json
+
+
 Example queries
 ---------------
 
