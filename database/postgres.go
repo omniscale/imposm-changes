@@ -36,7 +36,6 @@ var initSql = []string{
     tags HSTORE,
     PRIMARY KEY (id, version)
 );`,
-	`CREATE INDEX IF NOT EXISTS nodes_geometry_idx ON "%[1]s".nodes USING GIST (geometry);`,
 	`CREATE TABLE IF NOT EXISTS "%[1]s".ways (
     id INT NOT NULL,
     add BOOLEAN,
@@ -50,7 +49,6 @@ var initSql = []string{
     tags HSTORE,
     PRIMARY KEY (id, version)
 );`,
-	`CREATE INDEX IF NOT EXISTS ways_changset_idx ON "%[1]s".ways USING btree (changeset);`,
 	`CREATE TABLE IF NOT EXISTS "%[1]s".nds (
     way_id INT NOT NULL,
     way_version INT NOT NULL,
@@ -76,7 +74,6 @@ var initSql = []string{
     tags HSTORE,
     PRIMARY KEY (id, version)
 );`,
-	`CREATE INDEX IF NOT EXISTS relations_changset_idx ON "%[1]s".relations USING btree (changeset);`,
 	`CREATE TABLE IF NOT EXISTS "%[1]s".members (
     relation_id INT NOT NULL,
     relation_version INT,
@@ -104,7 +101,6 @@ var initSql = []string{
     bbox Geometry(POLYGON, 4326),
     PRIMARY KEY (id)
 );`,
-	`CREATE INDEX IF NOT EXISTS changesets_bbox_idx ON "%[1]s".changesets USING GIST (bbox);`,
 	`CREATE TABLE IF NOT EXISTS "%[1]s".comments (
     changeset_id BIGINT NOT NULL,
     idx INT,
@@ -118,6 +114,16 @@ var initSql = []string{
           ON UPDATE CASCADE
           ON DELETE CASCADE
 );`,
+}
+
+var initIndexSql = []struct {
+	name string
+	sql  string
+}{
+	{"nodes_geometry_idx", `CREATE INDEX "%[2]s" ON "%[1]s".nodes USING GIST (geometry);`},
+	{"ways_changset_idx", `CREATE INDEX "%[2]s" ON "%[1]s".ways USING btree (changeset);`},
+	{"relations_changset_idx", `CREATE INDEX "%[2]s" ON "%[1]s".relations USING btree (changeset);`},
+	{"changesets_bbox_idx", `CREATE INDEX "%[2]s" ON "%[1]s".changesets USING GIST (bbox);`},
 }
 
 type PostGIS struct {
@@ -167,6 +173,24 @@ func (p *PostGIS) Init() error {
 		if _, err := tx.Exec(stmt); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("error while calling %v: %v", stmt, err)
+		}
+	}
+
+	// CREATE INDEX IF NOT EXISTS is only supported for PostgreSQL >= 9.5
+	// do manual check
+	for _, s := range initIndexSql {
+		row := tx.QueryRow(`SELECT COUNT(*) > 0 FROM pg_indexes WHERE schemaname = $1 AND indexname = $2`, p.schema, s.name)
+		var exists bool
+		err := row.Scan(&exists)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			idxStmt := fmt.Sprintf(s.sql, p.schema, s.name)
+			if _, err := tx.Exec(idxStmt); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("error while calling %v: %v", idxStmt, err)
+			}
 		}
 	}
 
