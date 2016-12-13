@@ -36,6 +36,7 @@ var initSql = []string{
     tags HSTORE,
     PRIMARY KEY (id, version)
 );`,
+	`CREATE INDEX IF NOT EXISTS nodes_geometry_idx ON "%[1]s".nodes USING GIST (geometry);`,
 	`CREATE TABLE IF NOT EXISTS "%[1]s".ways (
     id INT NOT NULL,
     add BOOLEAN,
@@ -103,6 +104,7 @@ var initSql = []string{
     bbox Geometry(POLYGON, 4326),
     PRIMARY KEY (id)
 );`,
+	`CREATE INDEX IF NOT EXISTS changesets_bbox_idx ON "%[1]s".changesets USING GIST (bbox);`,
 	`CREATE TABLE IF NOT EXISTS "%[1]s".comments (
     changeset_id BIGINT NOT NULL,
     idx INT,
