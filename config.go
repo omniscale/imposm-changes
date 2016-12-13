@@ -1,4 +1,4 @@
-package changetracker
+package changes
 
 import (
 	"encoding/json"

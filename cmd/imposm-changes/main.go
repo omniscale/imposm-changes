@@ -4,7 +4,7 @@ import (
 	"flag"
 	"log"
 
-	"github.com/omniscale/osm-changetracker"
+	"github.com/omniscale/imposm-changes"
 )
 
 func main() {
@@ -15,11 +15,11 @@ func main() {
 	if *configFilename == "" {
 		log.Fatal("missing -config")
 	}
-	config, err := changetracker.LoadConfig(*configFilename)
+	config, err := changes.LoadConfig(*configFilename)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := changetracker.Run(config); err != nil {
+	if err := changes.Run(config); err != nil {
 		log.Fatalf("%+v", err)
 	}
 }

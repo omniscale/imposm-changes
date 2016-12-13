@@ -1,14 +1,14 @@
-package changetracker
+package changes
 
 import (
 	"io"
 	"log"
 	"time"
 
+	"github.com/omniscale/imposm-changes/database"
 	"github.com/omniscale/imposm3/parser/changeset"
 	"github.com/omniscale/imposm3/parser/diff"
 	"github.com/omniscale/imposm3/replication"
-	"github.com/omniscale/osm-changetracker/database"
 	"github.com/pkg/errors"
 )
 
