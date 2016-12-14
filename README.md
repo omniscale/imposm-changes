@@ -26,7 +26,7 @@ Run
     mkdir imposm-changes
     cd imposm-changes
     cp $GOPATH/src/github.com/omniscale/imposm-changes/config.json ./
-    imposm-changes run -config config.json
+    imposm-changes -config config.json
 
 
 Example queries
