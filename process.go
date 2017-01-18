@@ -56,12 +56,6 @@ func Run(config *Config) error {
 	nextDiff := diffDl.Sequences()
 	nextChange := changeDl.Sequences()
 
-	var filter func(diff.Element) bool
-	if config.LimitTo != nil {
-		bf := &BboxFilter{config.LimitTo[0], config.LimitTo[1], config.LimitTo[2], config.LimitTo[3]}
-		filter = bf.FilterElement
-	}
-
 	cleanup := time.Tick(5 * time.Minute)
 
 	for {
@@ -86,9 +80,6 @@ func Run(config *Config) error {
 				}
 				if err != nil {
 					return errors.Wrapf(err, "parsing diff %s", seq.Filename)
-				}
-				if filter != nil && filter(elem) {
-					continue
 				}
 				numElements += 1
 				if err := db.ImportElem(elem); err != nil {
@@ -143,17 +134,4 @@ func Run(config *Config) error {
 	}
 
 	return nil
-}
-
-type BboxFilter struct {
-	Minx, Miny, Maxx, Maxy float64
-}
-
-func (b *BboxFilter) FilterElement(elem diff.Element) bool {
-	if elem.Node != nil {
-		if elem.Node.Long < b.Minx || elem.Node.Long > b.Maxx || elem.Node.Lat < b.Miny || elem.Node.Lat > b.Maxy {
-			return true
-		}
-	}
-	return false
 }

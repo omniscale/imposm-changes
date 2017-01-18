@@ -374,7 +374,7 @@ SELECT id FROM "%[1]s".changesets
 WHERE NOT open
 AND NOT (bbox && ST_MakeEnvelope($1, $2, $3, $4))
 `
-	for _, table := range []string{"ways", "relations"} {
+	for _, table := range []string{"nodes", "ways", "relations"} {
 		stmt := fmt.Sprintf(`
 DELETE FROM "%[1]s".%[2]s WHERE changeset IN (`+changesetsStmt+`)`,
 			p.schema, table,
