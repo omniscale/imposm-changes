@@ -12,7 +12,7 @@ import (
 type Config struct {
 	Connection string      `json:"connection"`
 	Schemas    Schemas     `json:"schemas"`
-	LimitTo    *[4]float64 `json:"limitto"`
+	LimitTo    *[4]float64 `json:"changes_bbox"`
 	DiffDir    string      `json:"diffdir"`
 	ChangesDir string      `json:"changesdir"`
 

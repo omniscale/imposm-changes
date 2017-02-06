@@ -11,7 +11,7 @@ Uses an limitations
 Imposm-Changes only imports OSM change files (.osc.gz) and not complete planet datasets.
 You won't be able to construct the geometry of ways or relations if they were only modified or deleted.
 
-You will typically use the ``limitto`` option to monitor a region/country extent. This allows you to monitor the changes of the last few weeks with moderate server requirements (only a few GB disk).
+You will typically use the ``changes_bbox`` option to monitor a region/country extent. This allows you to monitor the changes of the last few weeks with moderate server requirements (only a few GB disk).
 
 
 Installation
@@ -33,7 +33,7 @@ Example queries
 ---------------
 
 Here are a few example queries, that demonstrate what you can do with the resulting database.
-Note that you should always filter changesets ob the bbox as the datasets temporarily contains changesets outside of ``limitto``.
+Note that you should always filter changesets to the bbox as the datasets temporarily contains changesets outside of ``changes_bbox``.
 
 
 Count changes in the last 8 hours within a bounding box:
