@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 
 	"github.com/omniscale/imposm-changes"
@@ -9,9 +10,14 @@ import (
 
 func main() {
 	configFilename := flag.String("config", "", "configuration file")
+	version := flag.Bool("version", false, "print version and exit")
 
 	flag.Parse()
 
+	if *version {
+		fmt.Println("imposm-changes", changes.Version)
+		return
+	}
 	if *configFilename == "" {
 		log.Fatal("missing -config")
 	}
