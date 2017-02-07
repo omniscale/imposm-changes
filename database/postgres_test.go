@@ -3,7 +3,7 @@ package database
 import "testing"
 
 func TestSchema(t *testing.T) {
-	p, err := NewPostGIS("sslmode=disable", "changes")
+	p, err := NewPostGIS("postgis:///?sslmode=disable", "changes")
 	if err != nil {
 		t.Fatal(err)
 	}
