@@ -61,7 +61,7 @@ func Run(config *Config) error {
 	for {
 		select {
 		case seq := <-nextDiff:
-			log.Printf("importing diff %s from %s", seq.Filename, seq.Time)
+			log.Printf("info: importing diff %s from %s", seq.Filename, seq.Time)
 			start := time.Now()
 			if err := db.Begin(); err != nil {
 				return errors.Wrap(err, "starting transaction")
@@ -83,7 +83,7 @@ func Run(config *Config) error {
 				}
 				numElements += 1
 				if err := db.ImportElem(elem); err != nil {
-					log.Println(err)
+					log.Println("error:", err)
 				}
 			}
 			if err := db.SaveDiffStatus(seq.Sequence, seq.Time); err != nil {
@@ -92,9 +92,9 @@ func Run(config *Config) error {
 			if err := db.Commit(); err != nil {
 				return errors.Wrapf(err, "committing diff")
 			}
-			log.Printf("\timported %d elements in %s", numElements, time.Since(start))
+			log.Printf("info: \timported %d elements in %s", numElements, time.Since(start))
 		case seq := <-nextChange:
-			log.Printf("importing changeset %s from %s", seq.Filename, seq.Time)
+			log.Printf("info: importing changeset %s from %s", seq.Filename, seq.Time)
 			start := time.Now()
 			if err := db.Begin(); err != nil {
 				return errors.Wrap(err, "starting transaction")
@@ -105,7 +105,7 @@ func Run(config *Config) error {
 			}
 			for _, c := range changes {
 				if err := db.ImportChangeset(c); err != nil {
-					log.Println(err)
+					log.Println("error:", err)
 				}
 			}
 			if err := db.SaveChangesetStatus(seq.Sequence, seq.Time); err != nil {
@@ -114,10 +114,10 @@ func Run(config *Config) error {
 			if err := db.Commit(); err != nil {
 				return errors.Wrapf(err, "committing changeset")
 			}
-			log.Printf("\timported %d changeset in %s", len(changes), time.Since(start))
+			log.Printf("info: \timported %d changeset in %s", len(changes), time.Since(start))
 		case <-cleanup:
 			if config.LimitTo != nil {
-				log.Printf("cleaning up elements/changesets")
+				log.Printf("info: cleaning up elements/changesets")
 				// Cleanup ways/relations outside of limitto (based on extent of the changesets)
 				// Do this before CleanupChangesets, to prevent ways/relations that have no
 				// changeset.

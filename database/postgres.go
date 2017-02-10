@@ -389,7 +389,7 @@ DELETE FROM "%[1]s".%[2]s WHERE changeset IN (`+changesetsStmt+`)`,
 			tx.Rollback()
 			return err
 		}
-		log.Printf("removed %d from %s", rows, table)
+		log.Printf("debug: removed %d from %s", rows, table)
 	}
 	return tx.Commit()
 }
@@ -418,7 +418,7 @@ AND NOT (bbox && ST_MakeEnvelope($1, $2, $3, $4))
 		tx.Rollback()
 		return err
 	}
-	log.Printf("removed %d from changesets", rows)
+	log.Printf("debug: removed %d from changesets", rows)
 	return tx.Commit()
 }
 
