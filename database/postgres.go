@@ -1,7 +1,10 @@
 package database
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"strings"
@@ -10,9 +13,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/pkg/errors"
 
-	"github.com/omniscale/imposm3/element"
-	"github.com/omniscale/imposm3/parser/changeset"
-	"github.com/omniscale/imposm3/parser/diff"
+	osm "github.com/omniscale/go-osm"
 )
 
 var initSql = []string{
@@ -131,8 +132,10 @@ type PostGIS struct {
 	tx               *sql.Tx
 	nodeStmt         *sql.Stmt
 	wayStmt          *sql.Stmt
+	wayLimitStmt     *sql.Stmt
 	ndsStmt          *sql.Stmt
 	relStmt          *sql.Stmt
+	relLimitStmt     *sql.Stmt
 	memberStmt       *sql.Stmt
 	changeStmt       *sql.Stmt
 	changeUpdateStmt *sql.Stmt
@@ -257,6 +260,28 @@ func (p *PostGIS) Begin() error {
 	}
 	p.wayStmt = wayStmt
 
+	wayLimitStmt, err := p.tx.Prepare(
+		fmt.Sprintf(`INSERT INTO "%[1]s".ways (
+            id,
+            add,
+            modify,
+            delete,
+            user_name,
+            user_id,
+            timestamp,
+            version,
+            changeset,
+            tags
+        ) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+	WHERE EXISTS (
+		SELECT 1 FROM "%[1]s".nodes WHERE id = ANY ($11)
+	)`, p.schema),
+	)
+	if err != nil {
+		return err
+	}
+	p.wayLimitStmt = wayLimitStmt
+
 	ndsStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`INSERT INTO "%[1]s".nds (
             way_id,
@@ -288,6 +313,29 @@ func (p *PostGIS) Begin() error {
 		return err
 	}
 	p.relStmt = relStmt
+
+	relLimitStmt, err := p.tx.Prepare(
+		fmt.Sprintf(`INSERT INTO "%[1]s".relations (
+            id,
+            add,
+            modify,
+            delete,
+            user_name,
+            user_id,
+            timestamp,
+            version,
+            changeset,
+            tags
+        ) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+	WHERE EXISTS (SELECT 1 FROM "%[1]s".ways WHERE id = ANY($11) LIMIT 1)
+	OR EXISTS (SELECT 1 FROM "%[1]s".nodes WHERE id = ANY($12) LIMIT 1)
+	OR EXISTS (SELECT 1 FROM "%[1]s".relations WHERE id = ANY($13) LIMIT 1)
+	`, p.schema),
+	)
+	if err != nil {
+		return err
+	}
+	p.relLimitStmt = relLimitStmt
 
 	memberStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`INSERT INTO "%[1]s".members (
@@ -422,7 +470,10 @@ AND NOT (bbox && ST_MakeEnvelope($1, $2, $3, $4))
 	return tx.Commit()
 }
 
-func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
+// ImportElem imports a single Diff element.
+// Ways and relations are only imported if at least one referenced node (or way) is
+// included in the database. This keeps the database sparse for imports with limitto.
+func (p *PostGIS) ImportElem(elem osm.Diff) (err error) {
 	_, err = p.tx.Exec("SAVEPOINT insert")
 	if err != nil {
 		return
@@ -436,23 +487,23 @@ func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 		}
 	}()
 	var add, mod, del bool
-	if elem.Mod {
+	if elem.Modify {
 		mod = true
-	} else if elem.Add {
+	} else if elem.Create {
 		add = true
-	} else if elem.Del {
+	} else if elem.Delete {
 		del = true
 	}
 	if elem.Node != nil {
 		nd := elem.Node
 		if _, err = p.nodeStmt.Exec(
-			nd.Id,
+			nd.ID,
 			add,
 			mod,
 			del,
 			nd.Long, nd.Lat,
 			nd.Metadata.UserName,
-			nd.Metadata.UserId,
+			nd.Metadata.UserID,
 			nd.Metadata.Timestamp.UTC(),
 			nd.Metadata.Version,
 			nd.Metadata.Changeset,
@@ -462,71 +513,336 @@ func (p *PostGIS) ImportElem(elem diff.Element) (err error) {
 		}
 	} else if elem.Way != nil {
 		w := elem.Way
-		if _, err = p.wayStmt.Exec(
-			w.Id,
+		res, err := p.wayLimitStmt.Exec(
+			w.ID,
 			add,
 			mod,
 			del,
 			w.Metadata.UserName,
-			w.Metadata.UserId,
+			w.Metadata.UserID,
+			w.Metadata.Timestamp.UTC(),
+			w.Metadata.Version,
+			w.Metadata.Changeset,
+			hstoreString(w.Tags),
+			pq.Array(w.Refs),
+		)
+		if err != nil {
+			return errors.Wrapf(err, "importing way %v", elem.Way)
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			for i, ref := range elem.Way.Refs {
+				if _, err = p.ndsStmt.Exec(
+					w.ID,
+					w.Metadata.Version,
+					i,
+					ref,
+				); err != nil {
+					return errors.Wrapf(err, "importing nds %v of way %v", ref, elem.Way)
+				}
+			}
+		}
+	} else if elem.Rel != nil {
+		rel := elem.Rel
+		nodeRefs := make([]int64, 0)
+		wayRefs := make([]int64, 0, len(rel.Members)) // most relations have way members
+		relRefs := make([]int64, 0)
+		for _, m := range rel.Members {
+			if m.Type == osm.NODE {
+				nodeRefs = append(nodeRefs, m.ID)
+			}
+			if m.Type == osm.WAY {
+				wayRefs = append(wayRefs, m.ID)
+			}
+			if m.Type == osm.RELATION {
+				relRefs = append(relRefs, m.ID)
+			}
+		}
+		res, err := p.relLimitStmt.Exec(
+			rel.ID,
+			add,
+			mod,
+			del,
+			rel.Metadata.UserName,
+			rel.Metadata.UserID,
+			rel.Metadata.Timestamp.UTC(),
+			rel.Metadata.Version,
+			rel.Metadata.Changeset,
+			hstoreString(rel.Tags),
+			pq.Array(wayRefs),
+			pq.Array(nodeRefs),
+			pq.Array(relRefs),
+		)
+		if err != nil {
+			return errors.Wrapf(err, "importing relation %v", elem.Rel)
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			for i, m := range elem.Rel.Members {
+				var nodeID, wayID, relID interface{}
+				switch m.Type {
+				case osm.NODE:
+					nodeID = m.ID
+				case osm.WAY:
+					wayID = m.ID
+				case osm.RELATION:
+					relID = m.ID
+				}
+				if _, err = p.memberStmt.Exec(
+					rel.ID,
+					rel.Metadata.Version,
+					m.Type,
+					m.Role,
+					i,
+					nodeID,
+					wayID,
+					relID,
+				); err != nil {
+					return errors.Wrapf(err, "importing member %v of relation %v", m, elem.Rel)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// ImportNodes inserts all Nodes in a single COPY statement.
+func (p *PostGIS) ImportNodes(nds []osm.Node) (err error) {
+	_, err = p.tx.Exec("SAVEPOINT insert")
+	if err != nil {
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			p.tx.Exec("ROLLBACK TO SAVEPOINT insert")
+		} else {
+			_, err = p.tx.Exec("RELEASE SAVEPOINT insert")
+		}
+	}()
+	nodeStmt, err := p.tx.Prepare(
+		fmt.Sprintf(`COPY "%[1]s".nodes (
+            id,
+            add,
+            modify,
+            delete,
+            geometry,
+            user_name,
+            user_id,
+            timestamp,
+            version,
+            changeset,
+            tags) FROM STDIN`, p.schema),
+	)
+	if err != nil {
+		return err
+	}
+	for _, nd := range nds {
+		wkb, err := EWKBHex(nd, 4326)
+		if _, err = nodeStmt.Exec(
+			nd.ID,
+			true,
+			false,
+			false,
+			string(wkb),
+			nd.Metadata.UserName,
+			nd.Metadata.UserID,
+			nd.Metadata.Timestamp.UTC(),
+			nd.Metadata.Version,
+			nd.Metadata.Changeset,
+			hstoreString(nd.Tags),
+		); err != nil {
+			return errors.Wrapf(err, "importing node %v", nd)
+		}
+	}
+	if _, err := nodeStmt.Exec(); err != nil {
+		return err
+	}
+	return nodeStmt.Close()
+}
+
+// ImportWays inserts all Ways in a single COPY statement.
+func (p *PostGIS) ImportWays(ws []osm.Way) (err error) {
+	_, err = p.tx.Exec("SAVEPOINT insert")
+	if err != nil {
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			p.tx.Exec("ROLLBACK TO SAVEPOINT insert")
+		} else {
+			_, err = p.tx.Exec("RELEASE SAVEPOINT insert")
+		}
+	}()
+	wayStmt, err := p.tx.Prepare(
+		fmt.Sprintf(`COPY "%[1]s".ways (
+            id,
+            add,
+            modify,
+            delete,
+            user_name,
+            user_id,
+            timestamp,
+            version,
+            changeset,
+            tags) FROM STDIN`, p.schema),
+	)
+	if err != nil {
+		return err
+	}
+	for _, w := range ws {
+		if _, err = wayStmt.Exec(
+			w.ID,
+			true,
+			false,
+			false,
+			w.Metadata.UserName,
+			w.Metadata.UserID,
 			w.Metadata.Timestamp.UTC(),
 			w.Metadata.Version,
 			w.Metadata.Changeset,
 			hstoreString(w.Tags),
 		); err != nil {
-			return errors.Wrapf(err, "importing way %v", elem.Way)
+			return errors.Wrapf(err, "importing way %v", ws)
 		}
-		for i, ref := range elem.Way.Refs {
-			if _, err = p.ndsStmt.Exec(
-				w.Id,
+	}
+	if _, err := wayStmt.Exec(); err != nil {
+		return err
+	}
+	if err := wayStmt.Close(); err != nil {
+		return err
+	}
+
+	ndsStmt, err := p.tx.Prepare(
+		fmt.Sprintf(`COPY "%[1]s".nds (
+            way_id,
+            way_version,
+            idx,
+	    node_id) FROM STDIN`, p.schema),
+	)
+	if err != nil {
+		return err
+	}
+	for _, w := range ws {
+		for i, ref := range w.Refs {
+			if _, err = ndsStmt.Exec(
+				w.ID,
 				w.Metadata.Version,
 				i,
 				ref,
 			); err != nil {
-				return errors.Wrapf(err, "importing nds %v of way %v", ref, elem.Way)
+				return errors.Wrapf(err, "importing nds %v of way %v", ref, w)
 			}
 		}
-	} else if elem.Rel != nil {
-		rel := elem.Rel
-		if _, err = p.relStmt.Exec(
-			rel.Id,
-			add,
-			mod,
-			del,
+	}
+	if _, err := ndsStmt.Exec(); err != nil {
+		return err
+	}
+	return ndsStmt.Close()
+}
+
+// ImportRelations inserts all Relations in a single COPY statement.
+func (p *PostGIS) ImportRelations(rs []osm.Relation) (err error) {
+	_, err = p.tx.Exec("SAVEPOINT insert")
+	if err != nil {
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			p.tx.Exec("ROLLBACK TO SAVEPOINT insert")
+		} else {
+			_, err = p.tx.Exec("RELEASE SAVEPOINT insert")
+		}
+	}()
+	relStmt, err := p.tx.Prepare(
+		fmt.Sprintf(`COPY "%[1]s".relations (
+            id,
+            add,
+            modify,
+            delete,
+            user_name,
+            user_id,
+            timestamp,
+            version,
+            changeset,
+            tags) FROM STDIN`, p.schema),
+	)
+	if err != nil {
+		return err
+	}
+
+	for _, rel := range rs {
+		if _, err = relStmt.Exec(
+			rel.ID,
+			true,
+			false,
+			false,
 			rel.Metadata.UserName,
-			rel.Metadata.UserId,
+			rel.Metadata.UserID,
 			rel.Metadata.Timestamp.UTC(),
 			rel.Metadata.Version,
 			rel.Metadata.Changeset,
 			hstoreString(rel.Tags),
 		); err != nil {
-			return errors.Wrapf(err, "importing relation %v", elem.Rel)
+			return errors.Wrap(err, "importing relations")
 		}
-		for i, m := range elem.Rel.Members {
-			var nodeId, wayId, relId interface{}
+	}
+
+	if _, err := relStmt.Exec(); err != nil {
+		return errors.Wrap(err, "importing relations")
+	}
+	if err := relStmt.Close(); err != nil {
+		return errors.Wrap(err, "importing relations")
+	}
+
+	memberStmt, err := p.tx.Prepare(
+		fmt.Sprintf(`COPY "%[1]s".members (
+            relation_id,
+            relation_version,
+            type,
+            role,
+            idx,
+            member_node_id,
+            member_way_id,
+            member_relation_id
+	    ) FROM STDIN`, p.schema),
+	)
+	if err != nil {
+		return err
+	}
+
+	for _, rel := range rs {
+		for i, m := range rel.Members {
+			var nodeID, wayID, relID interface{}
 			switch m.Type {
-			case element.NODE:
-				nodeId = m.Id
-			case element.WAY:
-				wayId = m.Id
-			case element.RELATION:
-				relId = m.Id
+			case osm.NODE:
+				nodeID = m.ID
+			case osm.WAY:
+				wayID = m.ID
+			case osm.RELATION:
+				relID = m.ID
 			}
-			if _, err = p.memberStmt.Exec(
-				rel.Id,
+			if _, err = memberStmt.Exec(
+				rel.ID,
 				rel.Metadata.Version,
 				m.Type,
 				m.Role,
 				i,
-				nodeId,
-				wayId,
-				relId,
+				nodeID,
+				wayID,
+				relID,
 			); err != nil {
-				return errors.Wrapf(err, "importing member %v of relation %v", m, elem.Rel)
+				return errors.Wrap(err, "importing relation members")
 			}
 		}
 	}
-
+	if _, err := memberStmt.Exec(); err != nil {
+		return errors.Wrap(err, "importing relation members")
+	}
+	if err := memberStmt.Close(); err != nil {
+		return errors.Wrap(err, "importing relations")
+	}
 	return nil
 }
 
@@ -568,7 +884,7 @@ func (p *PostGIS) readStatus(statusType string) (int, error) {
 	return sequence, err
 }
 
-func (p *PostGIS) ImportChangeset(c changeset.Changeset) error {
+func (p *PostGIS) ImportChangeset(c osm.Changeset) error {
 	bbox := bboxPolygon(c)
 	if _, err := p.tx.Exec("SAVEPOINT insert_changeset"); err != nil {
 		return err
@@ -580,44 +896,44 @@ func (p *PostGIS) ImportChangeset(c changeset.Changeset) error {
 		closedAt = &closedUtc
 	}
 	if _, err := p.changeStmt.Exec(
-		c.Id,
+		c.ID,
 		c.CreatedAt.UTC(),
 		closedAt,
 		c.Open,
 		c.NumChanges,
-		c.User,
-		c.UserId,
+		c.UserName,
+		c.UserID,
 		bbox,
-		hstoreStringChangeset(c.Tags),
+		hstoreString(c.Tags),
 	); err != nil {
 		if _, err := p.tx.Exec("ROLLBACK TO SAVEPOINT insert_changeset"); err != nil {
 			return err
 		}
 		if _, err := p.changeUpdateStmt.Exec(
-			c.Id,
+			c.ID,
 			c.CreatedAt.UTC(),
 			closedAt,
 			c.Open,
 			c.NumChanges,
-			c.User,
-			c.UserId,
+			c.UserName,
+			c.UserID,
 			bbox,
-			hstoreStringChangeset(c.Tags),
+			hstoreString(c.Tags),
 		); err != nil {
 			return errors.Wrapf(err, "updating changeset: %v", c)
 		}
-		if _, err := p.tx.Exec(fmt.Sprintf(`DELETE FROM "%[1]s".comments WHERE changeset_id = $1`, p.schema), c.Id); err != nil {
+		if _, err := p.tx.Exec(fmt.Sprintf(`DELETE FROM "%[1]s".comments WHERE changeset_id = $1`, p.schema), c.ID); err != nil {
 			return errors.Wrapf(err, "deleting comments of %v", c)
 		}
 	}
 
 	for i, com := range c.Comments {
 		if _, err := p.commentStmt.Exec(
-			c.Id,
+			c.ID,
 			i,
-			com.User,
-			com.UserId,
-			com.Date.UTC(),
+			com.UserName,
+			com.UserID,
+			com.CreatedAt.UTC(),
 			com.Text,
 		); err != nil {
 			return errors.Wrapf(err, "inserting comments for %v", c)
@@ -633,7 +949,7 @@ func (p *PostGIS) ImportChangeset(c changeset.Changeset) error {
 
 var hstoreReplacer = strings.NewReplacer("\\", "\\\\", "\"", "\\\"")
 
-func hstoreString(tags element.Tags) string {
+func hstoreString(tags osm.Tags) string {
 	kv := make([]string, 0, len(tags))
 	for k, v := range tags {
 		kv = append(kv, `"`+hstoreReplacer.Replace(k)+`"=>"`+hstoreReplacer.Replace(v)+`"`)
@@ -641,20 +957,36 @@ func hstoreString(tags element.Tags) string {
 	return strings.Join(kv, ", ")
 }
 
-func hstoreStringChangeset(tags []changeset.Tag) string {
-	kv := make([]string, 0, len(tags))
-	for _, t := range tags {
-		kv = append(kv, `"`+hstoreReplacer.Replace(t.Key)+`"=>"`+hstoreReplacer.Replace(t.Value)+`"`)
-	}
-	return strings.Join(kv, ", ")
-}
-
-func bboxPolygon(c changeset.Changeset) interface{} {
-	if c.MinLon != 0.0 && c.MaxLon != 0.0 && c.MinLat != 0.0 && c.MaxLat != 0.0 {
+func bboxPolygon(c osm.Changeset) interface{} {
+	if c.MaxExtent != [4]float64{0, 0, 0, 0} {
 		return fmt.Sprintf(
 			"SRID=4326; POLYGON((%[1]f %[2]f, %[1]f %[4]f, %[3]f %[4]f, %[3]f %[2]f, %[1]f %[2]f))",
-			c.MinLon, c.MinLat, c.MaxLon, c.MaxLat,
+			c.MaxExtent[0], c.MaxExtent[1], c.MaxExtent[2], c.MaxExtent[3],
 		)
 	}
 	return nil
+}
+
+const (
+	wkbSridFlag  = 0x20000000
+	wkbPointType = 1
+)
+
+func EWKBHex(nd osm.Node, srid int) ([]byte, error) {
+	buf := &bytes.Buffer{}
+	binary.Write(buf, binary.LittleEndian, uint8(1)) // little endian
+	if srid != 0 {
+		binary.Write(buf, binary.LittleEndian, uint32(wkbPointType|wkbSridFlag))
+		binary.Write(buf, binary.LittleEndian, uint32(srid))
+	} else {
+		binary.Write(buf, binary.LittleEndian, uint32(wkbPointType))
+	}
+
+	binary.Write(buf, binary.LittleEndian, nd.Long)
+	binary.Write(buf, binary.LittleEndian, nd.Lat)
+
+	src := buf.Bytes()
+	dst := make([]byte, hex.EncodedLen(len(src)))
+	hex.Encode(dst, src)
+	return dst, nil
 }
