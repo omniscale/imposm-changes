@@ -1,0 +1,107 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!--
+The test file uses the following ID schema:
+   test cases 10000-99900
+   + nodes 0-59
+   + ways 50-69
+   + relations 70-79
+   + users 80-89
+   + changesets 90-99
+ -->
+ <osm version="0.6" generator="Osmosis SNAPSHOT-r25240">
+  <!-- some nodes are filltered out -->
+  <node id="10100" version="1" timestamp="2017-05-02T14:50:31Z" uid="10180" user="User10180" changeset="10190" lat="-43.0" lon="7.0"/>
+  <node id="10101" version="1" timestamp="2017-05-02T14:50:31Z" uid="10180" user="User10180" changeset="10190" lat="43.0" lon="7.0"/>
+
+  <!-- all nodes out of limitto  -->
+  <node id="10200" version="1" timestamp="2017-05-02T14:50:31Z" uid="10280" user="User10280" changeset="10290" lat="-43.0" lon="7.0"/>
+  <node id="10201" version="1" timestamp="2017-05-02T14:50:31Z" uid="10280" user="User10280" changeset="10290" lat="-43.0" lon="8.0"/>
+  <way id="10250" version="1" timestamp="2017-05-02T14:00:00Z" uid="10280" user="User10280" changeset="10290">
+    <nd ref="10200"/>
+    <nd ref="10200"/>
+    <tag k="highway" v="primary"/>
+  </way>
+
+  <!-- one node out of limitto  -->
+  <node id="10300" version="1" timestamp="2017-05-02T14:50:31Z" uid="10380" user="User10380" changeset="10390" lat="-43.0" lon="7.0"/>
+  <node id="10301" version="1" timestamp="2017-05-02T14:50:31Z" uid="10380" user="User10380" changeset="10390" lat="43.0" lon="8.0"/>
+  <way id="10350" version="1" timestamp="2017-05-02T14:00:00Z" uid="10380" user="User10380" changeset="10390">
+    <nd ref="10300"/>
+    <nd ref="10301"/>
+    <tag k="highway" v="primary"/>
+  </way>
+
+  <!-- all nodes inside limitto  -->
+  <node id="10400" version="1" timestamp="2017-05-02T14:50:31Z" uid="10480" user="User10480" changeset="10490" lat="43.0" lon="7.0"/>
+  <node id="10401" version="1" timestamp="2017-05-02T14:50:31Z" uid="10480" user="User10480" changeset="10490" lat="43.0" lon="8.0"/>
+  <way id="10450" version="1" timestamp="2017-05-02T14:00:00Z" uid="10480" user="User10480" changeset="10490">
+    <nd ref="10400"/>
+    <nd ref="10401"/>
+    <tag k="highway" v="primary"/>
+  </way>
+
+  <!-- relations with limitto -->
+  <node id="10500" version="1" timestamp="2017-05-02T14:00:00Z" uid="10580" user="User10580" changeset="10590" lat="-43.0" lon="7.0"/>
+  <node id="10501" version="1" timestamp="2017-05-02T14:00:00Z" uid="10580" user="User10580" changeset="10590" lat="43.0" lon="8.0"/>
+  <way id="10550" version="1" timestamp="2017-05-02T14:00:00Z" uid="10580" user="User10580" changeset="10590">
+    <nd ref="10500"/>
+    <nd ref="10501"/>
+    <tag k="highway" v="primary"/>
+  </way>
+  <!-- single node outside of limitto -->
+  <relation id="10570" version="1" timestamp="2017-05-02T14:00:00Z" uid="10580" user="User10580" changeset="10590">
+    <member type="node" role="stop" ref="10500"/>
+  </relation>
+  <!-- single node inside of limitto -->
+  <relation id="10571" version="1" timestamp="2017-05-02T14:00:00Z" uid="10580" user="User10580" changeset="10590">
+    <member type="node" role="stop" ref="10501"/>
+  </relation>
+  <!-- one of two nodes inside of limitto -->
+  <relation id="10572" version="1" timestamp="2017-05-02T14:00:00Z" uid="10580" user="User10580" changeset="10590">
+    <member type="node" role="stop" ref="10500"/>
+    <member type="node" role="stop" ref="10501"/>
+  </relation>
+  <!-- way of relation was inserted -->
+  <relation id="10573" version="1" timestamp="2017-05-02T14:00:00Z" uid="10580" user="User10580" changeset="10590">
+    <member type="node" role="stop" ref="10500"/>
+    <member type="way" role="stop" ref="10550"/>
+  </relation>
+  <!-- relation of relation was inserted -->
+  <relation id="10574" version="1" timestamp="2017-05-02T14:00:00Z" uid="10580" user="User10580" changeset="10590">
+    <member type="node" role="stop" ref="10500"/>
+    <member type="relation" role="stop" ref="10573"/>
+  </relation>
+
+
+  <!-- prepare diff test data -->
+  <!-- modify/delete nodes -->
+  <node id="20100" version="1" timestamp="2017-05-02T14:00:00Z" uid="20180" user="User20180" changeset="20190" lat="-43.0" lon="7.0"/>
+  <node id="20101" version="1" timestamp="2017-05-02T14:00:00Z" uid="20180" user="User20180" changeset="20190" lat="43.0" lon="7.0"/>
+  <node id="20102" version="1" timestamp="2017-05-02T14:00:00Z" uid="20180" user="User20180" changeset="20190" lat="-43.0" lon="7.0"/>
+  <node id="20103" version="1" timestamp="2017-05-02T14:00:00Z" uid="20180" user="User20180" changeset="20190" lat="43.0" lon="7.0"/>
+
+  <!-- create way missing nodes -->
+  <node id="20200" version="1" timestamp="2027-05-02T14:00:00Z" uid="20280" user="User20280" changeset="20290" lat="-43.0" lon="7.0"/>
+  <node id="20201" version="1" timestamp="2027-05-02T14:00:00Z" uid="20280" user="User20280" changeset="20290" lat="-43.0" lon="7.0"/>
+
+  <!-- create way one node node present -->
+  <node id="20300" version="1" timestamp="2037-05-02T14:00:00Z" uid="20380" user="User20380" changeset="20390" lat="43.0" lon="7.0"/>
+  <node id="20301" version="1" timestamp="2037-05-02T14:00:00Z" uid="20380" user="User20380" changeset="20390" lat="-43.0" lon="7.0"/>
+
+  <!-- create way one node becomes present -->
+  <node id="20400" version="1" timestamp="2047-05-02T14:00:00Z" uid="20480" user="User20480" changeset="20490" lat="-43.0" lon="7.0"/>
+  <node id="20401" version="1" timestamp="2047-05-02T14:00:00Z" uid="20480" user="User20480" changeset="20490" lat="-43.0" lon="7.0"/>
+
+  <!-- diff import of already imported elements -->
+  <node id="22000" version="1" timestamp="2017-05-02T14:00:00Z" uid="22080" user="User22080" changeset="22090" lat="-43.0" lon="7.0"/>
+  <node id="22001" version="1" timestamp="2017-05-02T14:00:00Z" uid="22080" user="User22080" changeset="22090" lat="43.0" lon="7.0"/>
+  <way id="22050" version="1" timestamp="2017-05-02T14:00:00Z" uid="22080" user="User22080" changeset="22090">
+    <nd ref="22000"/>
+    <nd ref="22001"/>
+    <tag k="highway" v="primary"/>
+  </way>
+  <relation id="22070" version="1" timestamp="2017-05-02T14:00:00Z" uid="22080" user="User22080" changeset="22090">
+    <member type="way" role="stop" ref="22050"/>
+  </relation>
+
+</osm>

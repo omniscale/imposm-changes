@@ -1,0 +1,57 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<osmChange version="0.6" generator="Osmosis 0.41">
+
+
+
+  <!-- modify/delete nodes -->
+  <modify>
+    <node id="20100" version="2" timestamp="2017-05-02T14:00:00Z" uid="20180" user="User20180" changeset="20190" lat="-43.0" lon="7.0"/>
+    <node id="20101" version="2" timestamp="2017-05-02T14:00:00Z" uid="20180" user="User20180" changeset="20190" lat="43.0" lon="7.0"/>
+  </modify>
+  <delete>
+    <node id="20102" version="2" timestamp="2017-05-02T14:00:00Z" uid="20180" user="User20180" changeset="20190" lat="-43.0" lon="7.0"/>
+    <node id="20103" version="2" timestamp="2017-05-02T14:00:00Z" uid="20180" user="User20180" changeset="20190" lat="43.0" lon="7.0"/>
+  </delete>
+
+  <!-- create way missing nodes -->
+  <create>
+    <way id="20250" version="1" timestamp="2027-05-02T14:00:00Z" uid="20280" user="User20280" changeset="20290">
+      <nd ref="20200"/>
+      <nd ref="20201"/>
+      <tag k="highway" v="primary"/>
+    </way>
+  </create>
+
+  <!-- create way one node node present -->
+  <create>
+    <way id="20350" version="1" timestamp="2037-05-02T14:00:00Z" uid="20380" user="User20380" changeset="20390">
+      <nd ref="20300"/>
+      <nd ref="20301"/>
+      <tag k="highway" v="primary"/>
+    </way>
+  </create>
+
+  <!-- create way one node becomes present -->
+  <modify>
+    <node id="20400" version="2" timestamp="2047-05-02T14:00:00Z" uid="20480" user="User20480" changeset="20490" lat="43.0" lon="7.0"/>
+    <way id="20450" version="1" timestamp="2047-05-02T14:00:00Z" uid="20480" user="User20480" changeset="20490">
+      <nd ref="20400"/>
+      <nd ref="20401"/>
+      <tag k="highway" v="primary"/>
+    </way>
+  </modify>
+
+
+  <!-- diff import of already imported elements -->
+  <node id="22000" version="1" timestamp="2017-05-02T14:00:00Z" uid="22080" user="User22080" changeset="22090" lat="-43.0" lon="7.0"/>
+  <node id="22001" version="1" timestamp="2017-05-02T14:00:00Z" uid="22080" user="User22080" changeset="22090" lat="43.0" lon="8.0"/>
+  <way id="22050" version="1" timestamp="2017-05-02T14:00:00Z" uid="22080" user="User22080" changeset="22090">
+    <nd ref="22000"/>
+    <nd ref="22001"/>
+    <tag k="highway" v="primary"/>
+  </way>
+  <relation id="22070" version="1" timestamp="2017-05-02T14:00:00Z" uid="22080" user="User22080" changeset="22090">
+    <member type="way" role="stop" ref="22050"/>
+  </relation>
+
+</osmChange>
