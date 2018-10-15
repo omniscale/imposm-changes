@@ -419,7 +419,20 @@ func (p *PostGIS) Begin() error {
 }
 
 func (p *PostGIS) Commit() error {
-	return p.tx.Commit()
+	err := p.tx.Commit()
+	p.tx = nil
+	return err
+}
+
+func (p *PostGIS) Close() error {
+	if p.tx != nil {
+		if err := p.tx.Rollback(); err != nil {
+			p.db.Close()
+			return err
+		}
+		p.tx = nil
+	}
+	return p.db.Close()
 }
 
 func (p *PostGIS) CleanupElements(bbox [4]float64) error {
