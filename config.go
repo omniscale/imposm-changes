@@ -10,11 +10,11 @@ import (
 )
 
 type Config struct {
-	Connection string      `json:"connection"`
-	Schemas    Schemas     `json:"schemas"`
-	LimitTo    *[4]float64 `json:"changes_bbox"`
-	DiffDir    string      `json:"diffdir"`
-	ChangesDir string      `json:"changesdir"`
+	Connection string   `json:"connection"`
+	Schemas    Schemas  `json:"schemas"`
+	LimitTo    *LimitTo `json:"changes_bbox"`
+	DiffDir    string   `json:"diffdir"`
+	ChangesDir string   `json:"changesdir"`
 
 	DiffFromDiffDir   bool                   `json:"replication_from_diffdir"`
 	DiffUrl           string                 `json:"replication_url"`

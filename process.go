@@ -64,11 +64,11 @@ func Run(config *Config) error {
 	for {
 		select {
 		case seq := <-nextDiff:
-			if err := handleDiff(db, seq); err != nil {
+			if err := ImportDiff(db, config.LimitTo, seq); err != nil {
 				return err
 			}
 		case seq := <-nextChange:
-			if err := handleChangeset(db, seq); err != nil {
+			if err := ImportChangeset(db, seq); err != nil {
 				return err
 			}
 		case <-cleanup:
@@ -92,22 +92,12 @@ func Run(config *Config) error {
 	return nil
 }
 
-func Import(config *Config, pbfFilename string) error {
-	log.Println("import")
-	db, err := database.NewPostGIS(config.Connection, config.Schemas.Changes)
-	if err != nil {
-		return errors.Wrap(err, "creating postgis connection")
-	}
-	log.Println("init")
-	if err := db.Init(); err != nil {
-		return errors.Wrap(err, "init postgis changes database")
-	}
-
+func ImportPBF(db *database.PostGIS, limitTo *LimitTo, pbfFilename string) error {
 	start := time.Now()
-	log.Println("begin")
 	if err := db.Begin(); err != nil {
 		return errors.Wrap(err, "starting transaction")
 	}
+
 	// TODO defer rollback?
 	f, err := os.Open(pbfFilename)
 	if err != nil {
@@ -148,8 +138,8 @@ func Import(config *Config, pbfFilename string) error {
 			if !ok {
 				nodes = nil
 			}
-			if config.LimitTo != nil {
-				nds = filterNodes(nds, *config.LimitTo, insertedNodes)
+			if limitTo != nil {
+				nds = filterNodes(nds, limitTo, insertedNodes)
 			}
 			nNodes += len(nds)
 			if err := db.ImportNodes(nds); err != nil {
@@ -160,7 +150,7 @@ func Import(config *Config, pbfFilename string) error {
 			if !ok {
 				ways = nil
 			}
-			if config.LimitTo != nil {
+			if limitTo != nil {
 				ws = filterWays(ws, insertedNodes, insertedWays)
 			}
 			nWays += len(ws)
@@ -172,7 +162,7 @@ func Import(config *Config, pbfFilename string) error {
 			if !ok {
 				rels = nil
 			}
-			if config.LimitTo != nil {
+			if limitTo != nil {
 				rs = filterRelations(rs, insertedNodes, insertedWays, insertedRelations)
 			}
 			nRelations += len(rs)
@@ -200,10 +190,10 @@ func Import(config *Config, pbfFilename string) error {
 // filterNodes removes nodes that are outside the given bbox. IDs of all keept
 // nodes are added to insertedNodes. Alters nodes in-place and returns slice
 // with updated len.
-func filterNodes(nodes []osm.Node, bbox [4]float64, insertedNodes map[int64]struct{}) []osm.Node {
+func filterNodes(nodes []osm.Node, limitTo *LimitTo, insertedNodes map[int64]struct{}) []osm.Node {
 	i := 0
 	for _, nd := range nodes {
-		if nd.Long >= bbox[0] && nd.Long <= bbox[2] && nd.Lat >= bbox[1] && nd.Lat <= bbox[3] {
+		if limitTo.Contains(nd.Long, nd.Lat) {
 			nodes[i] = nd
 			insertedNodes[nd.ID] = struct{}{}
 			i++
@@ -269,7 +259,7 @@ func filterRelations(rels []osm.Relation, insertedNodes map[int64]struct{}, inse
 	return rels[:i]
 }
 
-func handleDiff(db *database.PostGIS, seq replication.Sequence) error {
+func ImportDiff(db *database.PostGIS, limitTo *LimitTo, seq replication.Sequence) error {
 	log.Printf("info: importing diff %s from %s", seq.Filename, seq.Time)
 	start := time.Now()
 	if err := db.Begin(); err != nil {
@@ -297,6 +287,9 @@ func handleDiff(db *database.PostGIS, seq replication.Sequence) error {
 
 	numElements := 0
 	for elem := range conf.Diffs {
+		if elem.Node != nil && !limitTo.Contains(elem.Node.Long, elem.Node.Lat) {
+			continue
+		}
 		numElements += 1
 		if err := db.ImportElem(elem); err != nil {
 			stop()
@@ -317,7 +310,7 @@ func handleDiff(db *database.PostGIS, seq replication.Sequence) error {
 	return nil
 }
 
-func handleChangeset(db *database.PostGIS, seq replication.Sequence) error {
+func ImportChangeset(db *database.PostGIS, seq replication.Sequence) error {
 	log.Printf("info: importing changeset %s from %s", seq.Filename, seq.Time)
 	start := time.Now()
 	if err := db.Begin(); err != nil {
