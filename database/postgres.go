@@ -234,7 +234,10 @@ func (p *PostGIS) Begin() error {
             timestamp,
             version,
             changeset,
-            tags) VALUES ($1, $2, $3, $4, ST_SetSRID(ST_Point($5, $6), 4326), $7, $8, $9, $10, $11, $12)`, p.schema),
+	    tags) SELECT $1, $2, $3, $4, ST_SetSRID(ST_Point($5, $6), 4326), $7, $8, $9, $10, $11, $12
+	WHERE NOT EXISTS (
+		SELECT 1 FROM "%[1]s".nodes where id = $1 AND version = $10
+	)`, p.schema),
 	)
 	if err != nil {
 		return err
@@ -275,7 +278,11 @@ func (p *PostGIS) Begin() error {
         ) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 	WHERE EXISTS (
 		SELECT 1 FROM "%[1]s".nodes WHERE id = ANY ($11)
-	)`, p.schema),
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM "%[1]s".ways WHERE id = $1 AND version = $8
+	)
+	`, p.schema),
 	)
 	if err != nil {
 		return err
@@ -327,9 +334,13 @@ func (p *PostGIS) Begin() error {
             changeset,
             tags
         ) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-	WHERE EXISTS (SELECT 1 FROM "%[1]s".ways WHERE id = ANY($11) LIMIT 1)
-	OR EXISTS (SELECT 1 FROM "%[1]s".nodes WHERE id = ANY($12) LIMIT 1)
-	OR EXISTS (SELECT 1 FROM "%[1]s".relations WHERE id = ANY($13) LIMIT 1)
+	WHERE (
+	    EXISTS (SELECT 1 FROM "%[1]s".ways WHERE id = ANY($11) LIMIT 1)
+	 OR EXISTS (SELECT 1 FROM "%[1]s".nodes WHERE id = ANY($12) LIMIT 1)
+	 OR EXISTS (SELECT 1 FROM "%[1]s".relations WHERE id = ANY($13) LIMIT 1)
+	) AND NOT EXISTS (
+		SELECT 1 FROM "%[1]s".relations WHERE id = $1 AND version = $8
+	)
 	`, p.schema),
 	)
 	if err != nil {
