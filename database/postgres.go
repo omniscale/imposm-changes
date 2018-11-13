@@ -13,8 +13,6 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/omniscale/go-osm"
-
-	"github.com/omniscale/imposm-changes/log"
 )
 
 var initSql = []string{
@@ -146,9 +144,10 @@ var initIndexSql = []struct {
 var errNoTx = errors.New("no open transaction")
 
 type PostGIS struct {
-	db     *sql.DB
-	tx     *sql.Tx
-	schema string
+	connection string
+	db         *sql.DB
+	tx         *sql.Tx
+	schema     string
 
 	// prepared statements:
 	stmtsPrepared bool
@@ -179,19 +178,30 @@ func NewPostGIS(connection string, schema string) (*PostGIS, error) {
 	if strings.HasPrefix(connection, "postgres: ") {
 		connection = connection[len("postgres: "):]
 	}
-	db, err := sql.Open("postgres", connection)
-	if err != nil {
-		return nil, err
-	}
 
 	if schema == "" {
 		schema = "public"
 	}
 
-	return &PostGIS{
-		db:     db,
-		schema: schema,
-	}, nil
+	p := &PostGIS{
+		connection: connection,
+		schema:     schema,
+	}
+
+	return p, p.open()
+}
+
+func (p *PostGIS) open() error {
+	if p.db != nil {
+		return nil
+	}
+	var err error
+	p.db, err = sql.Open("postgres", p.connection)
+	if err != nil {
+		return errors.Wrap(err, "opening db connection")
+	}
+
+	return nil
 }
 
 // Init creates all tables necessary.
@@ -279,6 +289,9 @@ func (p *PostGIS) InitIndices() error {
 func (p *PostGIS) Begin() error {
 	if p.tx != nil {
 		return errors.New("transaction already open")
+	}
+	if err := p.open(); err != nil {
+		return err
 	}
 	var err error
 	p.tx, err = p.db.Begin()
@@ -475,10 +488,15 @@ func (p *PostGIS) Commit() error {
 func (p *PostGIS) Close() error {
 	if err := p.rollback(); err != nil {
 		p.db.Close()
+		p.db = nil
 		return err
 	}
-
-	return p.db.Close()
+	if p.db == nil {
+		return nil
+	}
+	err := p.db.Close()
+	p.db = nil
+	return err
 }
 
 func (p *PostGIS) rollback() error {
@@ -490,64 +508,6 @@ func (p *PostGIS) rollback() error {
 	p.tx = nil
 	return err
 
-}
-
-func (p *PostGIS) CleanupElements(bbox [4]float64) error {
-	if p.tx == nil {
-		return errNoTx
-	}
-
-	changesetsStmt := `
-SELECT id FROM "%[1]s".changesets
-WHERE NOT open
-AND NOT (bbox && ST_MakeEnvelope($1, $2, $3, $4))
-`
-	for _, table := range []string{"nodes", "ways", "relations"} {
-		stmt := fmt.Sprintf(`
-DELETE FROM "%[1]s".%[2]s WHERE changeset IN (`+changesetsStmt+`)`,
-			p.schema, table,
-		)
-		r, err := p.tx.Exec(stmt, bbox[0], bbox[1], bbox[2], bbox[3])
-		if err != nil {
-			p.rollback()
-			return errors.Wrap(err, "cleanup elements")
-		}
-		rows, err := r.RowsAffected()
-		if err != nil {
-			p.rollback()
-			return err
-		}
-		log.Printf("[debug] removed %d from %s", rows, table)
-	}
-	return nil
-}
-
-func (p *PostGIS) CleanupChangesets(bbox [4]float64, olderThen time.Duration) error {
-	if p.tx == nil {
-		return errNoTx
-	}
-
-	before := time.Now().Add(-olderThen).UTC()
-
-	stmt := fmt.Sprintf(`
-DELETE FROM "%[1]s".changesets
-WHERE closed_at < $5
-AND NOT (bbox && ST_MakeEnvelope($1, $2, $3, $4))
-`,
-		p.schema,
-	)
-	r, err := p.tx.Exec(stmt, bbox[0], bbox[1], bbox[2], bbox[3], before)
-	if err != nil {
-		p.rollback()
-		return errors.Wrap(err, "cleanup changesets")
-	}
-	rows, err := r.RowsAffected()
-	if err != nil {
-		p.rollback()
-		return err
-	}
-	log.Printf("[debug] removed %d from changesets", rows)
-	return nil
 }
 
 // ImportElem imports a single Diff element.

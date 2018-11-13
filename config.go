@@ -16,12 +16,13 @@ type Config struct {
 	DiffDir    string   `json:"diffdir"`
 	ChangesDir string   `json:"changesdir"`
 
-	DiffFromDiffDir   bool                   `json:"replication_from_diffdir"`
-	DiffUrl           string                 `json:"replication_url"`
-	DiffInterval      config.MinutesInterval `json:"replication_interval"`
-	ChangesetUrl      string                 `json:"changeset_url"`
-	ChangesetInterval config.MinutesInterval `json:"changeset_interval"`
-	InitialHistory    config.MinutesInterval `json:"initial_history"`
+	DiffFromDiffDir         bool                   `json:"replication_from_diffdir"`
+	DiffUrl                 string                 `json:"replication_url"`
+	DiffInterval            config.MinutesInterval `json:"replication_interval"`
+	ChangesetUrl            string                 `json:"changeset_url"`
+	ChangesetInterval       config.MinutesInterval `json:"changeset_interval"`
+	ChangesetFromChangesDir bool                   `json:"changeset_from_changesdir"`
+	InitialHistory          config.MinutesInterval `json:"initial_history"`
 }
 
 type Schemas struct {

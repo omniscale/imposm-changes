@@ -25,12 +25,6 @@ func Run(config *Config) error {
 	if err != nil {
 		return errors.Wrap(err, "creating postgis connection")
 	}
-	if err := db.Init(); err != nil {
-		return errors.Wrap(err, "init postgis changes database")
-	}
-	if err := db.InitIndices(); err != nil {
-		return errors.Wrap(err, "init postgis indices")
-	}
 
 	diffSeq, err := db.ReadDiffStatus()
 	if err != nil {
@@ -41,7 +35,7 @@ func Run(config *Config) error {
 		if err != nil {
 			errors.Wrapf(err, "unable to read current diff from %s", config.DiffUrl)
 		}
-		diffSeq -= int(config.InitialHistory.Duration / config.DiffInterval.Duration)
+		diffSeq -= int(config.InitialHistory.Duration/config.DiffInterval.Duration) - 1
 	}
 	changeSeq, err := db.ReadChangesetStatus()
 	if err != nil {
@@ -52,22 +46,36 @@ func Run(config *Config) error {
 		if err != nil {
 			errors.Wrapf(err, "unable to read current changeset from %s", config.ChangesetUrl)
 		}
-		changeSeq -= int(config.InitialHistory.Duration / config.ChangesetInterval.Duration)
+		changeSeq -= int(config.InitialHistory.Duration/config.ChangesetInterval.Duration) - 1
 	}
 
 	var diffDl replication.Source
 	if config.DiffFromDiffDir {
-		diffDl = replDiff.NewReader(config.DiffDir, diffSeq)
+		diffDl = replDiff.NewReader(config.DiffDir, diffSeq+1)
 	} else {
-		diffDl = replDiff.NewDownloader(config.DiffDir, config.DiffUrl, diffSeq, config.DiffInterval.Duration)
+		diffDl = replDiff.NewDownloader(config.DiffDir, config.DiffUrl, diffSeq+1, config.DiffInterval.Duration)
 	}
 
-	changeDl := replChanges.NewDownloader(config.ChangesDir, config.ChangesetUrl, changeSeq, config.ChangesetInterval.Duration)
+	defer diffDl.Stop()
+	var changeDl replication.Source
+	if config.ChangesetFromChangesDir {
+		changeDl = replChanges.NewReader(config.ChangesDir, changeSeq+1)
+	} else {
+		changeDl = replChanges.NewDownloader(config.ChangesDir, config.ChangesetUrl, changeSeq+1, config.ChangesetInterval.Duration)
+	}
+	defer changeDl.Stop()
 
 	nextDiff := diffDl.Sequences()
 	nextChange := changeDl.Sequences()
 
-	cleanup := time.Tick(5 * time.Minute)
+	// For testing: Stop when no new changes/diffs appear for X seconds if
+	// IMPOSM_CHANGES_STOP_AFTER_FIRST_MISSING env is set.
+	// Can be used to import only existing files.
+	var checkWaiting <-chan time.Time
+	if os.Getenv("IMPOSM_CHANGES_STOP_AFTER_FIRST_MISSING") != "" {
+		checkWaiting = time.Tick(time.Second)
+	}
+	var lastImport time.Time
 
 	for {
 		select {
@@ -75,28 +83,20 @@ func Run(config *Config) error {
 			if err := ImportDiff(db, config.LimitTo, seq); err != nil {
 				return err
 			}
+			lastImport = time.Now()
 		case seq := <-nextChange:
 			if err := ImportChangeset(db, config.LimitTo, seq); err != nil {
 				return err
 			}
-		case <-cleanup:
-			if config.LimitTo != nil {
-				log.Printf("[info] cleaning up elements/changesets")
-				// Cleanup ways/relations outside of limitto (based on extent of the changesets)
-				// Do this before CleanupChangesets, to prevent ways/relations that have no
-				// changeset.
-				if err := db.CleanupElements(*config.LimitTo); err != nil {
-					return errors.Wrap(err, "cleaning up elements")
-				}
-				// Cleanup closed changesets outside of limitto
-				if err := db.CleanupChangesets(*config.LimitTo, 24*time.Hour); err != nil {
-					return errors.Wrap(err, "cleaning up changesets")
-				}
+			lastImport = time.Now()
+		case <-checkWaiting:
+			if time.Since(lastImport) > 2*time.Second {
+				log.Println("[info] stopping after some files are not available immediately")
+				return nil
 			}
 		}
 
 	}
-
 	return nil
 }
 
