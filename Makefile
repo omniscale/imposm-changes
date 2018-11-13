@@ -8,3 +8,8 @@ imposm-changes-linux:
 	GOOS=linux go build -a $(LDFLAGS) ./cmd/imposm-changes
 	mkdir -p dist
 	mv imposm-changes dist/imposm-changes-x64-linux-$(BUILD_VERSION)
+
+test-coverage:
+	go test -coverprofile go-osm.coverprofile -coverpkg ./... -covermode count ./...
+test-coverage-html: test-coverage
+	go tool cover -html go-osm.coverprofile
