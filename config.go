@@ -31,9 +31,9 @@ type Schemas struct {
 func LoadConfig(filename string) (*Config, error) {
 	conf := &Config{
 		InitialHistory:    config.MinutesInterval{Duration: time.Hour},
-		DiffUrl:           "http://planet.openstreetmap.org/replication/minute/",
+		DiffUrl:           "https://planet.openstreetmap.org/replication/minute/",
 		DiffInterval:      config.MinutesInterval{Duration: time.Minute},
-		ChangesetUrl:      "http://planet.openstreetmap.org/replication/changesets/",
+		ChangesetUrl:      "https://planet.openstreetmap.org/replication/changesets/",
 		ChangesetInterval: config.MinutesInterval{Duration: time.Minute},
 		Schemas:           Schemas{Changes: "changes"},
 	}
@@ -48,6 +48,7 @@ func LoadConfig(filename string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if conf.Connection == "" {
 		return nil, errors.New("missing connection option")
 	}
