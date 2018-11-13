@@ -8,10 +8,12 @@ The resulting database can be used to build change monitoring and QA application
 Uses an limitations
 -------------------
 
-Imposm-Changes only imports OSM change files (.osc.gz) and not complete planet datasets.
-You won't be able to construct the geometry of ways or relations if they were only modified or deleted.
+Imposm-Changes imports planet dumps and extracts (.osm.pbf), diff files (.osc.gz) and changeset files (.osm.gz).
 
-You will typically use the ``changes_bbox`` option to monitor a region/country extent. This allows you to monitor the changes of the last few weeks with moderate server requirements (only a few GB disk).
+It should work for whole planet imports but is not optimized for. You will
+typically use the ``changes_bbox`` option to monitor a smaller region/country
+extent. This allows you to monitor the changes of the last few weeks with
+moderate server requirements.
 
 
 Installation
@@ -26,15 +28,23 @@ Run
     mkdir imposm-changes
     cd imposm-changes
     cp $GOPATH/src/github.com/omniscale/imposm-changes/config.json ./
-    imposm-changes -config config.json
+
+    # Edit config.json with database connection and changes_bbox.
+
+    # Call `import` to make initial import.
+    imposm-changes -config config.json import path/to/initial.osm.pbf
+
+    # Call `run` to continuously download and import diff and changes files. 
+    # Start this via systemctl or similar in production.
+    # Make sure initial_history in config.json is large enough to cover all
+    # changes since the creation of your initial osm.pbf file.
+    imposm-changes -config config.json run
 
 
 Example queries
 ---------------
 
 Here are a few example queries, that demonstrate what you can do with the resulting database.
-Note that you should always filter changesets to the bbox as the datasets temporarily contains changesets outside of ``changes_bbox``.
-
 
 Count changes in the last 8 hours within a bounding box:
 
@@ -52,8 +62,7 @@ Count how many nodes where added, modified or deleted:
     WHERE changeset IN (
         SELECT id
         FROM changesets
-        WHERE bbox IS NOT NULL AND bbox && ST_MakeEnvelope(6.8, 50.8, 7.2, 52.6)
-        AND closed_at > (NOW() - INTERVAL '8 hours')
+        WHERE closed_at > (NOW() - INTERVAL '8 hours')
     );
 
 
@@ -62,30 +71,10 @@ Query information about nodes that where added or modified by Open Wheelmap.Org:
     SELECT id, add, modify, version, ST_AsText(geometry), tags, timestamp
     FROM nodes
     WHERE (add OR modify)
-    AND geometry && ST_MakeEnvelope(6.8, 50.8, 7.2, 52.6)
     AND changeset IN (
         SELECT id
         FROM changesets
-        WHERE bbox IS NOT NULL AND bbox && ST_MakeEnvelope(6.8, 50.8, 7.2, 52.6)
-        AND tags->'comment' = 'Modified via wheelmap.org'
+        WHERE tags->'comment' = 'Modified via wheelmap.org'
     );
 
 
-Imposm-Change does not contain geometries of ways or relations, but you can look them up from different tables.
-The following query returns all new and modified buildings from the last two days. The buildings are loaded from the `osm_buildings` table, which was imported by Imposm3.
-
-    SELECT name, geometry
-    FROM osm_buildings
-    WHERE osm_id IN (
-        SELECT id
-        FROM ways
-        WHERE (add OR modify)
-        AND changeset IN (
-            SELECT id
-            FROM changesets
-            WHERE bbox IS NOT NULL AND bbox && ST_MakeEnvelope(5.7, 50.2, 9.6, 52.6)
-            AND created_at > (NOW() - INTERVAL '2 days')
-        )
-    );
-
-Make sure these queries are fast enough before you run them in production. For example, you should have an index on ``osm_id`` in the ``osm_buildings`` table to avoid a slow table scan. You could also filter the ways with ``tags ? 'buildings'`` etc.
