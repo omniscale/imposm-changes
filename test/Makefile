@@ -12,6 +12,7 @@ clean:
 	rm -rf build
 
 PBF_FILES=$(addprefix build/,$(patsubst %.osm,%.pbf,$(wildcard *.osm)))
+CHANGES_FILES=$(addprefix build/,$(patsubst %.osmcs,%.osm.gz,$(wildcard *.osmcs)))
 OSCGZ_FILES=$(addprefix build/,$(patsubst %.osc,%.osc.gz,$(wildcard *.osc)))
 
 build/%.pbf: %.osm
@@ -22,10 +23,12 @@ build/%.osc.gz: %.osc
 	@mkdir -p build
 	gzip --stdout $< > $@
 
-files: $(PBF_FILES) $(OSCGZ_FILES)
+build/%.osm.gz: %.osmcs
+	@mkdir -p build
+	gzip --stdout $< > $@
+
+files: $(PBF_FILES) $(OSCGZ_FILES) $(CHANGES_FILES)
 
 test: files
 	(cd .. && go test ./test $(TESTOPTS))
 
-route_relation: files
-	(cd .. && go test -test.run TestRouteRelation_ ./test $(TESTOPTS))

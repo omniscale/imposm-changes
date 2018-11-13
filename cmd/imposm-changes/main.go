@@ -3,7 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
+	"os"
+
+	"github.com/omniscale/imposm-changes/log"
 
 	"comail.io/go/colog"
 	"github.com/omniscale/imposm-changes"
@@ -25,17 +27,40 @@ func main() {
 	}
 
 	if *version {
-		fmt.Println("imposm-changes", changes.Version)
+		fmt.Println(changes.Version)
 		return
 	}
 	if *configFilename == "" {
-		log.Fatal("error: missing -config")
+		flag.PrintDefaults()
+		log.Fatal("[error] missing -config")
 	}
 	config, err := changes.LoadConfig(*configFilename)
 	if err != nil {
-		log.Fatal("error:", err)
+		log.Fatalf("[error] loading config %q: %v", *configFilename, err)
 	}
-	if err := changes.Run(config); err != nil {
-		log.Fatalf("error: %+v", err)
+
+	if len(flag.Args()) < 1 {
+		log.Fatal("[error] sub-command required: version, run, import")
 	}
+
+	switch flag.Args()[0] {
+	case "run":
+		if err := changes.Run(config); err != nil {
+			log.Fatalf("[error] %+v", err)
+		}
+	case "import":
+		if len(flag.Args()) < 2 {
+			log.Fatal("[error] pbf file required")
+		}
+		if err := changes.ImportPBF(config, flag.Args()[1]); err != nil {
+			log.Fatalf("[error] %+v", err)
+		}
+	case "version":
+		fmt.Println(changes.Version)
+		os.Exit(0)
+	default:
+		flag.PrintDefaults()
+		log.Fatalf("[error] invalid command: '%s'", flag.Args()[1])
+	}
+	os.Exit(0)
 }

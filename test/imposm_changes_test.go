@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	osm "github.com/omniscale/go-osm"
+	"github.com/omniscale/go-osm/replication"
 	changes "github.com/omniscale/imposm-changes"
-	"github.com/omniscale/imposm3/replication"
 )
 
 func TestComplete(t *testing.T) {
@@ -35,7 +35,7 @@ func TestComplete(t *testing.T) {
 			limitTo:    &changes.LimitTo{0, 0, 90, 90},
 		}
 
-		ts.db, err = sql.Open("postgres", "sslmode=disable")
+		ts.sql, err = sql.Open("postgres", "sslmode=disable")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,10 +63,46 @@ func TestComplete(t *testing.T) {
 		}
 	})
 
+	t.Run("Check current_status", func(t *testing.T) {
+		db := ts.db(t)
+
+		// ReadXXXStatus is independent of an open transaction
+		if s, err := db.ReadChangesetStatus(); err != nil || s != -1 {
+			t.Error("unexpected changeset status", err, s)
+		}
+		if s, err := db.ReadDiffStatus(); err != nil || s != -1 {
+			t.Error("unexpected diff status", err, s)
+		}
+
+		if err := db.Begin(); err != nil {
+			t.Fatal("init transaction", err)
+		}
+		defer db.Close()
+		if err := db.SaveChangesetStatus(12345, time.Now()); err != nil {
+			t.Error("writing changes status", err)
+		}
+		if err := db.SaveDiffStatus(54321, time.Now()); err != nil {
+			t.Error("writing diff status", err)
+		}
+
+		if err := db.Commit(); err != nil {
+			t.Error("commiting current_status", err)
+		}
+
+		// ReadXXXStatus is independent of an open transaction
+		if s, err := db.ReadChangesetStatus(); err != nil || s != 12345 {
+			t.Error("unexpected changeset status", err, s)
+		}
+		if s, err := db.ReadDiffStatus(); err != nil || s != 54321 {
+			t.Error("unexpected diff status", err, s)
+		}
+
+	})
+
 	t.Run("Some nodes are filtered by limitto", func(t *testing.T) {
 		ts.assertMissingNode(t, 10100)
 		ts.assertNode(t, osm.Node{
-			OSMElem: osm.OSMElem{
+			Element: osm.Element{
 				ID: 10101,
 				Metadata: &osm.Metadata{
 					UserID:    10180,
@@ -88,7 +124,7 @@ func TestComplete(t *testing.T) {
 	t.Run("Limitto way, one node included", func(t *testing.T) {
 		ts.assertMissingNode(t, 10300)
 		ts.assertWay(t, osm.Way{
-			OSMElem: osm.OSMElem{
+			Element: osm.Element{
 				ID:   10350,
 				Tags: osm.Tags{"highway": "primary"},
 				Metadata: &osm.Metadata{
@@ -103,7 +139,7 @@ func TestComplete(t *testing.T) {
 	})
 	t.Run("Limitto way, all nodes included", func(t *testing.T) {
 		ts.assertWay(t, osm.Way{
-			OSMElem: osm.OSMElem{
+			Element: osm.Element{
 				ID:   10450,
 				Tags: osm.Tags{"highway": "primary"},
 				Metadata: &osm.Metadata{
@@ -127,7 +163,7 @@ func TestComplete(t *testing.T) {
 
 		ts.assertMissingNode(t, 10500)
 		ts.assertNode(t, osm.Node{
-			OSMElem: osm.OSMElem{
+			Element: osm.Element{
 				ID:       10501,
 				Metadata: &md,
 			},
@@ -136,7 +172,7 @@ func TestComplete(t *testing.T) {
 		})
 
 		ts.assertWay(t, osm.Way{
-			OSMElem: osm.OSMElem{
+			Element: osm.Element{
 				ID:       10550,
 				Tags:     osm.Tags{"highway": "primary"},
 				Metadata: &md,
@@ -144,15 +180,15 @@ func TestComplete(t *testing.T) {
 		})
 
 		ts.assertMissingRelation(t, 10570)
-		ts.assertRelation(t, osm.Relation{OSMElem: osm.OSMElem{ID: 10571, Metadata: &md}})
-		ts.assertRelation(t, osm.Relation{OSMElem: osm.OSMElem{ID: 10572, Metadata: &md}})
-		ts.assertRelation(t, osm.Relation{OSMElem: osm.OSMElem{ID: 10573, Metadata: &md}})
-		ts.assertRelation(t, osm.Relation{OSMElem: osm.OSMElem{ID: 10574, Metadata: &md}})
+		ts.assertRelation(t, osm.Relation{Element: osm.Element{ID: 10571, Metadata: &md}})
+		ts.assertRelation(t, osm.Relation{Element: osm.Element{ID: 10572, Metadata: &md}})
+		ts.assertRelation(t, osm.Relation{Element: osm.Element{ID: 10573, Metadata: &md}})
+		ts.assertRelation(t, osm.Relation{Element: osm.Element{ID: 10574, Metadata: &md}})
 
 	})
 
 	t.Run("Import Diff", func(t *testing.T) {
-		ts.importDiff(t, replication.Sequence{Filename: "build/testdata_diff.osc.gz"})
+		ts.importDiff(t, replication.Sequence{Time: time.Now(), Filename: "build/testdata_diff.osc.gz"})
 	})
 
 	t.Run("Modify/delete existing nodes", func(t *testing.T) {
@@ -162,9 +198,64 @@ func TestComplete(t *testing.T) {
 		ts.assertNodeVersions(t, 20103, 1, 2)
 	})
 
-	t.Run("Import of already imported elements ", func(t *testing.T) {
+	t.Run("Import of already imported elements", func(t *testing.T) {
 		ts.assertMissingNode(t, 22000) // out of limitto
 		ts.assertNodeVersions(t, 22001, 1)
+		ts.assertRelation(t, osm.Relation{Element: osm.Element{ID: 22070, Metadata: nil}})
+	})
+
+	t.Run("Import of new elements in diff", func(t *testing.T) {
+		ts.assertMissingNode(t, 30000) // out of limitto
+		ts.assertNodeVersions(t, 30001, 1)
+		ts.assertWay(t, osm.Way{
+			Element: osm.Element{
+				ID:   30050,
+				Tags: osm.Tags{"highway": "primary"},
+				Metadata: &osm.Metadata{
+					UserID:    30080,
+					UserName:  "User30080",
+					Version:   1,
+					Timestamp: time.Date(2017, 5, 2, 14, 0, 0, 0, time.UTC),
+					Changeset: 30090,
+				},
+			},
+		})
+
+		ts.assertRelation(t, osm.Relation{Element: osm.Element{ID: 30070, Metadata: nil}})
+		ts.assertRelation(t, osm.Relation{Element: osm.Element{ID: 30071, Metadata: nil}})
+	})
+
+	t.Run("Import Changesets", func(t *testing.T) {
+		ts.assertMissingChangeset(t, 90090)
+		ts.importChangeset(t, replication.Sequence{Time: time.Now(), Filename: "build/testdata_changes.osm.gz"})
+	})
+
+	t.Run("Imported changesets ", func(t *testing.T) {
+		ts.assertMissingChangeset(t, 91090)
+		ts.assertChangeset(t, osm.Changeset{
+			ID:         90090,
+			UserID:     90080,
+			UserName:   "user01",
+			NumChanges: 3,
+			MaxExtent:  [4]float64{0, -10, 20, 10},
+			CreatedAt:  time.Date(2018, 11, 12, 0, 0, 0, 0, time.UTC),
+			ClosedAt:   time.Date(2018, 11, 12, 0, 0, 4, 0, time.UTC),
+			Tags:       map[string]string{"comment": "changeset 90090"},
+			Comments: []osm.Comment{
+				{
+					UserID:    90081,
+					CreatedAt: time.Date(2018, 11, 12, 8, 0, 0, 0, time.UTC),
+					UserName:  "user02",
+					Text:      "Are you sure?",
+				},
+				{
+					UserID:    90080,
+					CreatedAt: time.Date(2018, 11, 12, 8, 0, 10, 0, time.UTC),
+					UserName:  "user01",
+					Text:      "Yes!",
+				},
+			},
+		})
 	})
 
 	t.Run("Cleanup", func(t *testing.T) {

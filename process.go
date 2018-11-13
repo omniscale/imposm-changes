@@ -2,17 +2,22 @@ package changes
 
 import (
 	"context"
-	"log"
 	"os"
 	"time"
+
+	"github.com/omniscale/imposm-changes/log"
+
+	"github.com/pkg/errors"
 
 	osm "github.com/omniscale/go-osm"
 	"github.com/omniscale/go-osm/parser/changeset"
 	"github.com/omniscale/go-osm/parser/diff"
 	"github.com/omniscale/go-osm/parser/pbf"
+	"github.com/omniscale/go-osm/replication"
+	replChanges "github.com/omniscale/go-osm/replication/changeset"
+	replDiff "github.com/omniscale/go-osm/replication/diff"
+
 	"github.com/omniscale/imposm-changes/database"
-	"github.com/omniscale/imposm3/replication"
-	"github.com/pkg/errors"
 )
 
 func Run(config *Config) error {
@@ -23,13 +28,16 @@ func Run(config *Config) error {
 	if err := db.Init(); err != nil {
 		return errors.Wrap(err, "init postgis changes database")
 	}
+	if err := db.InitIndices(); err != nil {
+		return errors.Wrap(err, "init postgis indices")
+	}
 
 	diffSeq, err := db.ReadDiffStatus()
 	if err != nil {
 		return errors.Wrap(err, "unable to read diff current status")
 	}
 	if diffSeq <= 0 {
-		diffSeq, err = replication.CurrentDiff(config.DiffUrl)
+		diffSeq, err = replDiff.CurrentSequence(config.DiffUrl)
 		if err != nil {
 			errors.Wrapf(err, "unable to read current diff from %s", config.DiffUrl)
 		}
@@ -40,7 +48,7 @@ func Run(config *Config) error {
 		return errors.Wrap(err, "unable to read changeset current status")
 	}
 	if changeSeq <= 0 {
-		changeSeq, err = replication.CurrentChangeset(config.ChangesetUrl)
+		changeSeq, err = replChanges.CurrentSequence(config.ChangesetUrl)
 		if err != nil {
 			errors.Wrapf(err, "unable to read current changeset from %s", config.ChangesetUrl)
 		}
@@ -49,12 +57,12 @@ func Run(config *Config) error {
 
 	var diffDl replication.Source
 	if config.DiffFromDiffDir {
-		diffDl = replication.NewDiffReader(config.DiffDir, diffSeq)
+		diffDl = replDiff.NewReader(config.DiffDir, diffSeq)
 	} else {
-		diffDl = replication.NewDiffDownloader(config.DiffDir, config.DiffUrl, diffSeq, config.DiffInterval.Duration)
+		diffDl = replDiff.NewDownloader(config.DiffDir, config.DiffUrl, diffSeq, config.DiffInterval.Duration)
 	}
 
-	changeDl := replication.NewChangesetDownloader(config.ChangesDir, config.ChangesetUrl, changeSeq, config.ChangesetInterval.Duration)
+	changeDl := replChanges.NewDownloader(config.ChangesDir, config.ChangesetUrl, changeSeq, config.ChangesetInterval.Duration)
 
 	nextDiff := diffDl.Sequences()
 	nextChange := changeDl.Sequences()
@@ -68,12 +76,12 @@ func Run(config *Config) error {
 				return err
 			}
 		case seq := <-nextChange:
-			if err := ImportChangeset(db, seq); err != nil {
+			if err := ImportChangeset(db, config.LimitTo, seq); err != nil {
 				return err
 			}
 		case <-cleanup:
 			if config.LimitTo != nil {
-				log.Printf("info: cleaning up elements/changesets")
+				log.Printf("[info] cleaning up elements/changesets")
 				// Cleanup ways/relations outside of limitto (based on extent of the changesets)
 				// Do this before CleanupChangesets, to prevent ways/relations that have no
 				// changeset.
@@ -92,10 +100,21 @@ func Run(config *Config) error {
 	return nil
 }
 
-func ImportPBF(db *database.PostGIS, limitTo *LimitTo, pbfFilename string) error {
+func ImportPBF(config *Config, pbfFilename string) error {
+	db, err := database.NewPostGIS(config.Connection, config.Schemas.Changes)
+	if err != nil {
+		return errors.Wrap(err, "creating postgis connection")
+	}
 	start := time.Now()
 	if err := db.Begin(); err != nil {
 		return errors.Wrap(err, "starting transaction")
+	}
+	defer db.Close()
+	if err := db.Init(); err != nil {
+		return errors.Wrap(err, "init postgis changes database")
+	}
+	if err := db.ResetLastState(); err != nil {
+		return errors.Wrap(err, "reset last state in database")
 	}
 
 	// TODO defer rollback?
@@ -132,14 +151,15 @@ func ImportPBF(db *database.PostGIS, limitTo *LimitTo, pbfFilename string) error
 	insertedWays := map[int64]struct{}{}
 	insertedRelations := map[int64]struct{}{}
 
+	var lastLog time.Time
 	for {
 		select {
 		case nds, ok := <-nodes:
 			if !ok {
 				nodes = nil
 			}
-			if limitTo != nil {
-				nds = filterNodes(nds, limitTo, insertedNodes)
+			if config.LimitTo != nil {
+				nds = filterNodes(nds, config.LimitTo, insertedNodes)
 			}
 			nNodes += len(nds)
 			if err := db.ImportNodes(nds); err != nil {
@@ -150,7 +170,7 @@ func ImportPBF(db *database.PostGIS, limitTo *LimitTo, pbfFilename string) error
 			if !ok {
 				ways = nil
 			}
-			if limitTo != nil {
+			if config.LimitTo != nil {
 				ws = filterWays(ws, insertedNodes, insertedWays)
 			}
 			nWays += len(ws)
@@ -162,7 +182,7 @@ func ImportPBF(db *database.PostGIS, limitTo *LimitTo, pbfFilename string) error
 			if !ok {
 				rels = nil
 			}
-			if limitTo != nil {
+			if config.LimitTo != nil {
 				rs = filterRelations(rs, insertedNodes, insertedWays, insertedRelations)
 			}
 			nRelations += len(rs)
@@ -171,15 +191,23 @@ func ImportPBF(db *database.PostGIS, limitTo *LimitTo, pbfFilename string) error
 				return errors.Wrap(err, "importing relations")
 			}
 		}
-		log.Printf("imported %8d nodes, %7d ways, %6d relations in %s", nNodes, nWays, nRelations, time.Since(start))
+		if time.Since(lastLog) > time.Second {
+			log.Printf("[progress] imported %8d nodes, %7d ways, %6d relations in %s", nNodes, nWays, nRelations, time.Since(start))
+			lastLog = time.Now()
+		}
 		if nodes == nil && ways == nil && rels == nil {
 			break
 		}
 	}
-
 	if err := parser.Error(); err != nil {
 		return errors.Wrapf(err, "parsing diff %s", pbfFilename)
 	}
+
+	start = time.Now()
+	if err := db.InitIndices(); err != nil {
+		log.Fatal("[error] creating indices:", err)
+	}
+	log.Printf("[step] created indices in %s", time.Since(start))
 
 	if err := db.Commit(); err != nil {
 		return errors.Wrapf(err, "committing diff")
@@ -233,17 +261,17 @@ func filterRelations(rels []osm.Relation, insertedNodes map[int64]struct{}, inse
 	checkMembers:
 		for _, m := range r.Members {
 			switch m.Type {
-			case osm.NODE:
+			case osm.NodeMember:
 				if _, ok := insertedNodes[m.ID]; ok {
 					found = true
 					break checkMembers
 				}
-			case osm.WAY:
+			case osm.WayMember:
 				if _, ok := insertedWays[m.ID]; ok {
 					found = true
 					break checkMembers
 				}
-			case osm.RELATION:
+			case osm.RelationMember:
 				if _, ok := insertedRelations[m.ID]; ok {
 					found = true
 					break checkMembers
@@ -260,12 +288,16 @@ func filterRelations(rels []osm.Relation, insertedNodes map[int64]struct{}, inse
 }
 
 func ImportDiff(db *database.PostGIS, limitTo *LimitTo, seq replication.Sequence) error {
-	log.Printf("info: importing diff %s from %s", seq.Filename, seq.Time)
+	log.Printf("[info] Importing diff #%d including changes till %s (%s behind)",
+		seq.Sequence,
+		seq.Time.Format(time.RFC3339),
+		time.Since(seq.Time).Truncate(time.Second),
+	)
 	start := time.Now()
 	if err := db.Begin(); err != nil {
 		return errors.Wrap(err, "starting transaction")
 	}
-	// TODO defer rollback?
+	defer db.Close() // will rollback if Commit was not called
 
 	f, err := os.Open(seq.Filename)
 	if err != nil {
@@ -306,17 +338,21 @@ func ImportDiff(db *database.PostGIS, limitTo *LimitTo, seq replication.Sequence
 	if err := db.Commit(); err != nil {
 		return errors.Wrapf(err, "committing diff")
 	}
-	log.Printf("info: \timported %d elements in %s", numElements, time.Since(start))
+	log.Printf("[step] \timported %d elements in %s", numElements, time.Since(start))
 	return nil
 }
 
-func ImportChangeset(db *database.PostGIS, seq replication.Sequence) error {
-	log.Printf("info: importing changeset %s from %s", seq.Filename, seq.Time)
+func ImportChangeset(db *database.PostGIS, limitTo *LimitTo, seq replication.Sequence) (err error) {
+	log.Printf("[info] Importing changes #%d including data till %s (%s behind)",
+		seq.Sequence,
+		seq.Time.Format(time.RFC3339),
+		time.Since(seq.Time).Truncate(time.Second),
+	)
 	start := time.Now()
 	if err := db.Begin(); err != nil {
 		return errors.Wrap(err, "starting transaction")
 	}
-	// TODO defer rollback?
+	defer db.Close() // will rollback if Commit was not called
 
 	f, err := os.Open(seq.Filename)
 	if err != nil {
@@ -337,6 +373,9 @@ func ImportChangeset(db *database.PostGIS, seq replication.Sequence) error {
 
 	numChanges := 0
 	for c := range conf.Changesets {
+		if !limitTo.Intersects(c.MaxExtent) {
+			continue
+		}
 		numChanges += 1
 		if err := db.ImportChangeset(c); err != nil {
 			stop()
@@ -353,6 +392,6 @@ func ImportChangeset(db *database.PostGIS, seq replication.Sequence) error {
 	if err := db.Commit(); err != nil {
 		return errors.Wrapf(err, "committing changeset")
 	}
-	log.Printf("info: \timported %d changeset in %s", numChanges, time.Since(start))
+	log.Printf("[step] \timported %d changeset in %s", numChanges, time.Since(start))
 	return nil
 }

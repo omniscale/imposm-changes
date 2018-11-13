@@ -6,114 +6,123 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/lib/pq"
 	"github.com/pkg/errors"
 
-	osm "github.com/omniscale/go-osm"
+	"github.com/omniscale/go-osm"
+
+	"github.com/omniscale/imposm-changes/log"
 )
 
 var initSql = []string{
 	`CREATE SCHEMA IF NOT EXISTS "%[1]s";`,
-	`CREATE TABLE IF NOT EXISTS "%[1]s".current_status (
-        type VARCHAR UNIQUE,
-        sequence INT,
-        timestamp TIMESTAMP WITH TIME ZONE
+	`
+CREATE TABLE IF NOT EXISTS "%[1]s".current_status (
+	type VARCHAR UNIQUE,
+	sequence INT,
+	timestamp TIMESTAMP WITH TIME ZONE
 );`,
-	`CREATE TABLE IF NOT EXISTS "%[1]s".nodes (
-    id BIGINT,
-    add BOOLEAN,
-    modify BOOLEAN,
-    delete BOOLEAN,
-    changeset INT,
-    geometry GEOMETRY(Point, 4326),
-    user_name VARCHAR,
-    user_id INT,
-    timestamp TIMESTAMP WITH TIME ZONE,
-    version INT,
-    tags HSTORE,
-    PRIMARY KEY (id, version)
+	`
+CREATE TABLE IF NOT EXISTS "%[1]s".nodes (
+	id BIGINT,
+	add BOOLEAN,
+	modify BOOLEAN,
+	delete BOOLEAN,
+	changeset INT,
+	geometry GEOMETRY(Point, 4326),
+	user_name VARCHAR,
+	user_id INT,
+	timestamp TIMESTAMP WITH TIME ZONE,
+	version INT,
+	tags HSTORE,
+	PRIMARY KEY (id, version)
 );`,
-	`CREATE TABLE IF NOT EXISTS "%[1]s".ways (
-    id INT NOT NULL,
-    add BOOLEAN,
-    modify BOOLEAN,
-    delete BOOLEAN,
-    changeset INT,
-    user_name VARCHAR,
-    user_id INT,
-    timestamp TIMESTAMP WITH TIME ZONE,
-    version INT,
-    tags HSTORE,
-    PRIMARY KEY (id, version)
+	`
+CREATE TABLE IF NOT EXISTS "%[1]s".ways (
+	id INT NOT NULL,
+	add BOOLEAN,
+	modify BOOLEAN,
+	delete BOOLEAN,
+	changeset INT,
+	user_name VARCHAR,
+	user_id INT,
+	timestamp TIMESTAMP WITH TIME ZONE,
+	version INT,
+	tags HSTORE,
+	PRIMARY KEY (id, version)
 );`,
-	`CREATE TABLE IF NOT EXISTS "%[1]s".nds (
-    way_id INT NOT NULL,
-    way_version INT NOT NULL,
-    idx INT,
-    node_id BIGINT NOT NULL,
-    PRIMARY KEY (way_id, way_version, idx, node_id),
-    FOREIGN KEY (way_id, way_version)
-        REFERENCES "%[1]s".ways (id, version)
-          ON UPDATE CASCADE
-          ON DELETE CASCADE
+	`
+CREATE TABLE IF NOT EXISTS "%[1]s".nds (
+	way_id INT NOT NULL,
+	way_version INT NOT NULL,
+	idx INT,
+	node_id BIGINT NOT NULL,
+	PRIMARY KEY (way_id, way_version, idx, node_id),
+	FOREIGN KEY (way_id, way_version)
+	REFERENCES "%[1]s".ways (id, version)
+		ON UPDATE CASCADE
+		ON DELETE CASCADE
 );`,
-	`CREATE TABLE IF NOT EXISTS "%[1]s".relations (
-    id INT NOT NULL,
-    add BOOLEAN,
-    modify BOOLEAN,
-    delete BOOLEAN,
-    changeset INT,
-    geometry GEOMETRY(Point, 4326),
-    user_name VARCHAR,
-    user_id INT,
-    timestamp TIMESTAMP WITH TIME ZONE,
-    version INT,
-    tags HSTORE,
-    PRIMARY KEY (id, version)
+	`
+CREATE TABLE IF NOT EXISTS "%[1]s".relations (
+	id INT NOT NULL,
+	add BOOLEAN,
+	modify BOOLEAN,
+	delete BOOLEAN,
+	changeset INT,
+	geometry GEOMETRY(Point, 4326),
+	user_name VARCHAR,
+	user_id INT,
+	timestamp TIMESTAMP WITH TIME ZONE,
+	version INT,
+	tags HSTORE,
+	PRIMARY KEY (id, version)
 );`,
-	`CREATE TABLE IF NOT EXISTS "%[1]s".members (
-    relation_id INT NOT NULL,
-    relation_version INT,
-    type VARCHAR,
-    role VARCHAR,
-    idx INT,
-    member_node_id BIGINT,
-    member_way_id INT,
-    member_relation_id INT,
-    PRIMARY KEY (relation_id, relation_version, idx),
-    FOREIGN KEY (relation_id, relation_version)
-        REFERENCES "%[1]s".relations (id, version)
-          ON UPDATE CASCADE
-          ON DELETE CASCADE
+	`
+CREATE TABLE IF NOT EXISTS "%[1]s".members (
+	relation_id INT NOT NULL,
+	relation_version INT,
+	type VARCHAR,
+	role VARCHAR,
+	idx INT,
+	member_node_id BIGINT,
+	member_way_id INT,
+	member_relation_id INT,
+	PRIMARY KEY (relation_id, relation_version, idx),
+	FOREIGN KEY (relation_id, relation_version)
+	REFERENCES "%[1]s".relations (id, version)
+		ON UPDATE CASCADE
+		ON DELETE CASCADE
 );`,
-	`CREATE TABLE IF NOT EXISTS "%[1]s".changesets (
-    id INT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE,
-    closed_at TIMESTAMP WITH TIME ZONE,
-    num_changes INT,
-    open BOOLEAN,
-    user_name VARCHAR,
-    user_id INT,
-    tags HSTORE,
-    bbox Geometry(POLYGON, 4326),
-    PRIMARY KEY (id)
+	`
+CREATE TABLE IF NOT EXISTS "%[1]s".changesets (
+	id INT NOT NULL,
+	created_at TIMESTAMP WITH TIME ZONE,
+	closed_at TIMESTAMP WITH TIME ZONE,
+	num_changes INT,
+	open BOOLEAN,
+	user_name VARCHAR,
+	user_id INT,
+	tags HSTORE,
+	bbox Geometry(POLYGON, 4326),
+	PRIMARY KEY (id)
 );`,
-	`CREATE TABLE IF NOT EXISTS "%[1]s".comments (
-    changeset_id BIGINT NOT NULL,
-    idx INT,
-    user_name VARCHAR,
-    user_id INT,
-    timestamp TIMESTAMP WITH TIME ZONE,
-    text VARCHAR,
-    PRIMARY KEY (changeset_id, idx),
-    FOREIGN KEY (changeset_id)
-        REFERENCES "%[1]s".changesets (id)
-          ON UPDATE CASCADE
-          ON DELETE CASCADE
+	`
+CREATE TABLE IF NOT EXISTS "%[1]s".comments (
+	changeset_id BIGINT NOT NULL,
+	idx INT,
+	user_name VARCHAR,
+	user_id INT,
+	timestamp TIMESTAMP WITH TIME ZONE,
+	text VARCHAR,
+	PRIMARY KEY (changeset_id, idx),
+	FOREIGN KEY (changeset_id)
+	REFERENCES "%[1]s".changesets (id)
+		ON UPDATE CASCADE
+		ON DELETE CASCADE
 );`,
 }
 
@@ -121,37 +130,56 @@ var initIndexSql = []struct {
 	name string
 	sql  string
 }{
+	// geometry index for quick intersection
 	{"nodes_geometry_idx", `CREATE INDEX "%[2]s" ON "%[1]s".nodes USING GIST (geometry);`},
+	{"changesets_bbox_idx", `CREATE INDEX "%[2]s" ON "%[1]s".changesets USING GIST (bbox);`},
+
+	// changeset IDs to filter elements of a specific changeset
+	{"nodes_changset_idx", `CREATE INDEX "%[2]s" ON "%[1]s".nodes USING btree (changeset);`},
 	{"ways_changset_idx", `CREATE INDEX "%[2]s" ON "%[1]s".ways USING btree (changeset);`},
 	{"relations_changset_idx", `CREATE INDEX "%[2]s" ON "%[1]s".relations USING btree (changeset);`},
-	{"changesets_bbox_idx", `CREATE INDEX "%[2]s" ON "%[1]s".changesets USING GIST (bbox);`},
+
+	// node_id to get ways affected by a node change
+	{"nds_node_idx", `CREATE INDEX "%[2]s" ON "%[1]s".nds USING btree (node_id);`},
 }
 
+var errNoTx = errors.New("no open transaction")
+
 type PostGIS struct {
-	db               *sql.DB
-	tx               *sql.Tx
-	nodeStmt         *sql.Stmt
-	wayStmt          *sql.Stmt
-	wayLimitStmt     *sql.Stmt
-	ndsStmt          *sql.Stmt
-	relStmt          *sql.Stmt
-	relLimitStmt     *sql.Stmt
-	memberStmt       *sql.Stmt
-	changeStmt       *sql.Stmt
+	db     *sql.DB
+	tx     *sql.Tx
+	schema string
+
+	// prepared statements:
+	stmtsPrepared bool
+
+	// insert nodes
+	nodeStmt *sql.Stmt
+	// insert way->node references
+	ndsStmt *sql.Stmt
+	// insert way if at least one referenced node is present
+	wayLimitStmt *sql.Stmt
+	// insert relation if at least one referenced node/way/relation is present
+	relLimitStmt *sql.Stmt
+	// insert members
+	memberStmt *sql.Stmt
+	// insert changeset
+	changeStmt *sql.Stmt
+	// update changeset
 	changeUpdateStmt *sql.Stmt
-	commentStmt      *sql.Stmt
-	schema           string
+	// insert comment
+	commentStmt *sql.Stmt
 }
 
 func NewPostGIS(connection string, schema string) (*PostGIS, error) {
 	if strings.HasPrefix(connection, "postgis") {
 		connection = strings.Replace(connection, "postgis", "postgres", 1)
 	}
-	params, err := pq.ParseURL(connection)
-	if err != nil {
-		return nil, errors.Wrapf(err, "unable to parse connection %s", connection)
+
+	if strings.HasPrefix(connection, "postgres: ") {
+		connection = connection[len("postgres: "):]
 	}
-	db, err := sql.Open("postgres", params)
+	db, err := sql.Open("postgres", connection)
 	if err != nil {
 		return nil, err
 	}
@@ -166,23 +194,71 @@ func NewPostGIS(connection string, schema string) (*PostGIS, error) {
 	}, nil
 }
 
+// Init creates all tables necessary.
 func (p *PostGIS) Init() error {
-	tx, err := p.db.Begin()
-	if err != nil {
-		return err
+	if p.tx == nil {
+		return errNoTx
 	}
+
 	for _, s := range initSql {
 		stmt := fmt.Sprintf(s, p.schema)
-		if _, err := tx.Exec(stmt); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("error while calling %v: %v", stmt, err)
+		if _, err := p.tx.Exec(stmt); err != nil {
+			p.rollback()
+			return errors.Wrapf(err, "executing DDL statement: %v", stmt)
 		}
 	}
 
+	for _, statusType := range []string{"changes", "diff"} {
+		row := p.tx.QueryRow(
+			fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM "%[1]s".current_status WHERE type = '%[2]s')`, p.schema, statusType),
+		)
+		var exists bool
+		err := row.Scan(&exists)
+		if err != nil {
+			p.rollback()
+			return errors.Wrap(err, "query current_status")
+		}
+		if !exists {
+			if _, err := p.tx.Exec(
+				fmt.Sprintf(`INSERT INTO "%[1]s".current_status (type, sequence) VALUES ($1, -1)`,
+					p.schema),
+				statusType,
+			); err != nil {
+				p.rollback()
+				return errors.Wrap(err, "init current_status")
+			}
+		}
+	}
+	return nil
+}
+
+// ResetLastState resets sequences in current_status tables.
+func (p *PostGIS) ResetLastState() error {
+	if p.tx == nil {
+		return errNoTx
+	}
+
+	for _, statusType := range []string{"changes", "diff"} {
+		if _, err := p.tx.Exec(
+			fmt.Sprintf(`UPDATE "%[1]s".current_status SET sequence = -1 WHERE type = $1`, p.schema),
+			statusType,
+		); err != nil {
+			p.rollback()
+			return errors.Wrap(err, "update current_status")
+		}
+	}
+	return nil
+}
+
+// InitIndices builds all predefined indices.
+func (p *PostGIS) InitIndices() error {
+	if p.tx == nil {
+		return errNoTx
+	}
 	// CREATE INDEX IF NOT EXISTS is only supported for PostgreSQL >= 9.5
 	// do manual check
 	for _, s := range initIndexSql {
-		row := tx.QueryRow(`SELECT COUNT(*) > 0 FROM pg_indexes WHERE schemaname = $1 AND indexname = $2`, p.schema, s.name)
+		row := p.tx.QueryRow(`SELECT COUNT(*) > 0 FROM pg_indexes WHERE schemaname = $1 AND indexname = $2`, p.schema, s.name)
 		var exists bool
 		err := row.Scan(&exists)
 		if err != nil {
@@ -190,51 +266,54 @@ func (p *PostGIS) Init() error {
 		}
 		if !exists {
 			idxStmt := fmt.Sprintf(s.sql, p.schema, s.name)
-			if _, err := tx.Exec(idxStmt); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("error while calling %v: %v", idxStmt, err)
+			if _, err := p.tx.Exec(idxStmt); err != nil {
+				p.rollback()
+				return errors.Wrapf(err, "creating index %v", idxStmt)
 			}
 		}
 	}
-
-	for _, statusType := range []string{"changes", "diff"} {
-		row := tx.QueryRow(
-			fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM "%[1]s".current_status WHERE type = '%[2]s')`, p.schema, statusType),
-		)
-		var exists bool
-		err := row.Scan(&exists)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			if _, err := tx.Exec(
-				fmt.Sprintf(`INSERT INTO "%[1]s".current_status (type, sequence) VALUES ('%[2]s', -1)`, p.schema, statusType)); err != nil {
-				return err
-			}
-		}
-	}
-	return tx.Commit()
+	return nil
 }
 
+// Begin starts a new transaction and prepares all insert statements.
 func (p *PostGIS) Begin() error {
+	if p.tx != nil {
+		return errors.New("transaction already open")
+	}
 	var err error
 	p.tx, err = p.db.Begin()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "creating db transaction")
 	}
+	return nil
+}
+
+func (p *PostGIS) prepareStmts() (err error) {
+	if p.tx == nil {
+		return errNoTx
+	}
+	if p.stmtsPrepared {
+		return nil
+	}
+	defer func() {
+		if err != nil {
+			p.rollback()
+		}
+	}()
+
 	nodeStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`INSERT INTO "%[1]s".nodes (
-            id,
-            add,
-            modify,
-            delete,
-            geometry,
-            user_name,
-            user_id,
-            timestamp,
-            version,
-            changeset,
-	    tags) SELECT $1, $2, $3, $4, ST_SetSRID(ST_Point($5, $6), 4326), $7, $8, $9, $10, $11, $12
+		id,
+		add,
+		modify,
+		delete,
+		geometry,
+		user_name,
+		user_id,
+		timestamp,
+		version,
+		changeset,
+		tags) SELECT $1, $2, $3, $4, ST_SetSRID(ST_Point($5, $6), 4326), $7, $8, $9, $10, $11, $12
 	WHERE NOT EXISTS (
 		SELECT 1 FROM "%[1]s".nodes where id = $1 AND version = $10
 	)`, p.schema),
@@ -244,38 +323,19 @@ func (p *PostGIS) Begin() error {
 	}
 	p.nodeStmt = nodeStmt
 
-	wayStmt, err := p.tx.Prepare(
-		fmt.Sprintf(`INSERT INTO "%[1]s".ways (
-            id,
-            add,
-            modify,
-            delete,
-            user_name,
-            user_id,
-            timestamp,
-            version,
-            changeset,
-            tags
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, p.schema),
-	)
-	if err != nil {
-		return err
-	}
-	p.wayStmt = wayStmt
-
 	wayLimitStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`INSERT INTO "%[1]s".ways (
-            id,
-            add,
-            modify,
-            delete,
-            user_name,
-            user_id,
-            timestamp,
-            version,
-            changeset,
-            tags
-        ) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+		id,
+		add,
+		modify,
+		delete,
+		user_name,
+		user_id,
+		timestamp,
+		version,
+		changeset,
+		tags
+	) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 	WHERE EXISTS (
 		SELECT 1 FROM "%[1]s".nodes WHERE id = ANY ($11)
 	)
@@ -285,57 +345,38 @@ func (p *PostGIS) Begin() error {
 	`, p.schema),
 	)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "preparing statement")
 	}
 	p.wayLimitStmt = wayLimitStmt
 
 	ndsStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`INSERT INTO "%[1]s".nds (
-            way_id,
-            way_version,
-            idx,
-            node_id
-        ) VALUES ($1, $2, $3, $4)`, p.schema),
+		way_id,
+		way_version,
+		idx,
+		node_id
+	) VALUES ($1, $2, $3, $4)`, p.schema),
 	)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "preparing statement")
 	}
 	p.ndsStmt = ndsStmt
 
-	relStmt, err := p.tx.Prepare(
-		fmt.Sprintf(`INSERT INTO "%[1]s".relations (
-            id,
-            add,
-            modify,
-            delete,
-            user_name,
-            user_id,
-            timestamp,
-            version,
-            changeset,
-            tags
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, p.schema),
-	)
-	if err != nil {
-		return err
-	}
-	p.relStmt = relStmt
-
 	relLimitStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`INSERT INTO "%[1]s".relations (
-            id,
-            add,
-            modify,
-            delete,
-            user_name,
-            user_id,
-            timestamp,
-            version,
-            changeset,
-            tags
-        ) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+		id,
+		add,
+		modify,
+		delete,
+		user_name,
+		user_id,
+		timestamp,
+		version,
+		changeset,
+		tags
+	) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 	WHERE (
-	    EXISTS (SELECT 1 FROM "%[1]s".ways WHERE id = ANY($11) LIMIT 1)
+		EXISTS (SELECT 1 FROM "%[1]s".ways WHERE id = ANY($11) LIMIT 1)
 	 OR EXISTS (SELECT 1 FROM "%[1]s".nodes WHERE id = ANY($12) LIMIT 1)
 	 OR EXISTS (SELECT 1 FROM "%[1]s".relations WHERE id = ANY($13) LIMIT 1)
 	) AND NOT EXISTS (
@@ -344,101 +385,116 @@ func (p *PostGIS) Begin() error {
 	`, p.schema),
 	)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "preparing statement")
 	}
 	p.relLimitStmt = relLimitStmt
 
 	memberStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`INSERT INTO "%[1]s".members (
-            relation_id,
-            relation_version,
-            type,
-            role,
-            idx,
-            member_node_id,
-            member_way_id,
-            member_relation_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, p.schema),
+		relation_id,
+		relation_version,
+		type,
+		role,
+		idx,
+		member_node_id,
+		member_way_id,
+		member_relation_id
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, p.schema),
 	)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "preparing statement")
 	}
 	p.memberStmt = memberStmt
 
 	changeStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`INSERT INTO "%[1]s".changesets (
-            id,
-            created_at,
-            closed_at,
-            open,
-            num_changes,
-            user_name,
-            user_id,
-            bbox,
-            tags
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, ST_GeomFromText($8), $9)`, p.schema),
+		id,
+		created_at,
+		closed_at,
+		open,
+		num_changes,
+		user_name,
+		user_id,
+		bbox,
+		tags
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, ST_GeomFromText($8), $9)`, p.schema),
 	)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "preparing statement")
 	}
 	p.changeStmt = changeStmt
 
 	changeUpdateStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`UPDATE "%[1]s".changesets SET
-            created_at=$2,
-            closed_at=$3,
-            open=$4,
-            num_changes=$5,
-            user_name=$6,
-            user_id=$7,
-            bbox=ST_GeomFromText($8),
-            tags=$9
-        WHERE id = $1`, p.schema),
+		created_at=$2,
+		closed_at=$3,
+		open=$4,
+		num_changes=$5,
+		user_name=$6,
+		user_id=$7,
+		bbox=ST_GeomFromText($8),
+		tags=$9
+	WHERE id = $1`, p.schema),
 	)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "preparing statement")
 	}
 	p.changeUpdateStmt = changeUpdateStmt
 
 	commentStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`INSERT INTO "%[1]s".comments (
-            changeset_id,
-            idx,
-            user_name,
-            user_id,
-            timestamp,
-            text
-        ) VALUES ($1, $2, $3, $4, $5, $6)`, p.schema),
+		changeset_id,
+		idx,
+		user_name,
+		user_id,
+		timestamp,
+		text
+	) VALUES ($1, $2, $3, $4, $5, $6)`, p.schema),
 	)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "preparing statement")
 	}
 	p.commentStmt = commentStmt
 
+	p.stmtsPrepared = true
 	return nil
 }
 
+// Commit commit current transaction.
 func (p *PostGIS) Commit() error {
+	if p.tx == nil {
+		return errNoTx
+	}
 	err := p.tx.Commit()
 	p.tx = nil
+	p.stmtsPrepared = false
 	return err
 }
 
+// Close closes database connection. Open transactions are rolled back.
 func (p *PostGIS) Close() error {
-	if p.tx != nil {
-		if err := p.tx.Rollback(); err != nil {
-			p.db.Close()
-			return err
-		}
-		p.tx = nil
+	if err := p.rollback(); err != nil {
+		p.db.Close()
+		return err
 	}
+
 	return p.db.Close()
 }
 
+func (p *PostGIS) rollback() error {
+	if p.tx == nil {
+		return nil
+	}
+	p.stmtsPrepared = false
+	err := p.tx.Rollback()
+	p.tx = nil
+	return err
+
+}
+
 func (p *PostGIS) CleanupElements(bbox [4]float64) error {
-	tx, err := p.db.Begin()
-	if err != nil {
-		return err
+	if p.tx == nil {
+		return errNoTx
 	}
 
 	changesetsStmt := `
@@ -451,26 +507,26 @@ AND NOT (bbox && ST_MakeEnvelope($1, $2, $3, $4))
 DELETE FROM "%[1]s".%[2]s WHERE changeset IN (`+changesetsStmt+`)`,
 			p.schema, table,
 		)
-		r, err := tx.Exec(stmt, bbox[0], bbox[1], bbox[2], bbox[3])
+		r, err := p.tx.Exec(stmt, bbox[0], bbox[1], bbox[2], bbox[3])
 		if err != nil {
-			tx.Rollback()
+			p.rollback()
 			return errors.Wrap(err, "cleanup elements")
 		}
 		rows, err := r.RowsAffected()
 		if err != nil {
-			tx.Rollback()
+			p.rollback()
 			return err
 		}
-		log.Printf("debug: removed %d from %s", rows, table)
+		log.Printf("[debug] removed %d from %s", rows, table)
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (p *PostGIS) CleanupChangesets(bbox [4]float64, olderThen time.Duration) error {
-	tx, err := p.db.Begin()
-	if err != nil {
-		return err
+	if p.tx == nil {
+		return errNoTx
 	}
+
 	before := time.Now().Add(-olderThen).UTC()
 
 	stmt := fmt.Sprintf(`
@@ -480,24 +536,34 @@ AND NOT (bbox && ST_MakeEnvelope($1, $2, $3, $4))
 `,
 		p.schema,
 	)
-	r, err := tx.Exec(stmt, bbox[0], bbox[1], bbox[2], bbox[3], before)
+	r, err := p.tx.Exec(stmt, bbox[0], bbox[1], bbox[2], bbox[3], before)
 	if err != nil {
-		tx.Rollback()
+		p.rollback()
 		return errors.Wrap(err, "cleanup changesets")
 	}
 	rows, err := r.RowsAffected()
 	if err != nil {
-		tx.Rollback()
+		p.rollback()
 		return err
 	}
-	log.Printf("debug: removed %d from changesets", rows)
-	return tx.Commit()
+	log.Printf("[debug] removed %d from changesets", rows)
+	return nil
 }
 
 // ImportElem imports a single Diff element.
 // Ways and relations are only imported if at least one referenced node (or way) is
 // included in the database. This keeps the database sparse for imports with limitto.
 func (p *PostGIS) ImportElem(elem osm.Diff) (err error) {
+	if p.tx == nil {
+		return errNoTx
+	}
+	if !p.stmtsPrepared {
+		if err := p.prepareStmts(); err != nil {
+			p.rollback()
+			return err
+		}
+	}
+
 	_, err = p.tx.Exec("SAVEPOINT insert")
 	if err != nil {
 		return
@@ -571,13 +637,13 @@ func (p *PostGIS) ImportElem(elem osm.Diff) (err error) {
 		wayRefs := make([]int64, 0, len(rel.Members)) // most relations have way members
 		relRefs := make([]int64, 0)
 		for _, m := range rel.Members {
-			if m.Type == osm.NODE {
+			if m.Type == osm.NodeMember {
 				nodeRefs = append(nodeRefs, m.ID)
 			}
-			if m.Type == osm.WAY {
+			if m.Type == osm.WayMember {
 				wayRefs = append(wayRefs, m.ID)
 			}
-			if m.Type == osm.RELATION {
+			if m.Type == osm.RelationMember {
 				relRefs = append(relRefs, m.ID)
 			}
 		}
@@ -603,11 +669,11 @@ func (p *PostGIS) ImportElem(elem osm.Diff) (err error) {
 			for i, m := range elem.Rel.Members {
 				var nodeID, wayID, relID interface{}
 				switch m.Type {
-				case osm.NODE:
+				case osm.NodeMember:
 					nodeID = m.ID
-				case osm.WAY:
+				case osm.WayMember:
 					wayID = m.ID
-				case osm.RELATION:
+				case osm.RelationMember:
 					relID = m.ID
 				}
 				if _, err = p.memberStmt.Exec(
@@ -631,6 +697,9 @@ func (p *PostGIS) ImportElem(elem osm.Diff) (err error) {
 
 // ImportNodes inserts all Nodes in a single COPY statement.
 func (p *PostGIS) ImportNodes(nds []osm.Node) (err error) {
+	if p.tx == nil {
+		return errNoTx
+	}
 	_, err = p.tx.Exec("SAVEPOINT insert")
 	if err != nil {
 		return
@@ -645,23 +714,23 @@ func (p *PostGIS) ImportNodes(nds []osm.Node) (err error) {
 	}()
 	nodeStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`COPY "%[1]s".nodes (
-            id,
-            add,
-            modify,
-            delete,
-            geometry,
-            user_name,
-            user_id,
-            timestamp,
-            version,
-            changeset,
-            tags) FROM STDIN`, p.schema),
+		id,
+		add,
+		modify,
+		delete,
+		geometry,
+		user_name,
+		user_id,
+		timestamp,
+		version,
+		changeset,
+		tags) FROM STDIN`, p.schema),
 	)
 	if err != nil {
 		return err
 	}
 	for _, nd := range nds {
-		wkb, err := EWKBHex(nd, 4326)
+		wkb, err := ewkbHexPoint(nd, 4326)
 		if _, err = nodeStmt.Exec(
 			nd.ID,
 			true,
@@ -686,6 +755,9 @@ func (p *PostGIS) ImportNodes(nds []osm.Node) (err error) {
 
 // ImportWays inserts all Ways in a single COPY statement.
 func (p *PostGIS) ImportWays(ws []osm.Way) (err error) {
+	if p.tx == nil {
+		return errNoTx
+	}
 	_, err = p.tx.Exec("SAVEPOINT insert")
 	if err != nil {
 		return
@@ -700,16 +772,16 @@ func (p *PostGIS) ImportWays(ws []osm.Way) (err error) {
 	}()
 	wayStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`COPY "%[1]s".ways (
-            id,
-            add,
-            modify,
-            delete,
-            user_name,
-            user_id,
-            timestamp,
-            version,
-            changeset,
-            tags) FROM STDIN`, p.schema),
+		id,
+		add,
+		modify,
+		delete,
+		user_name,
+		user_id,
+		timestamp,
+		version,
+		changeset,
+		tags) FROM STDIN`, p.schema),
 	)
 	if err != nil {
 		return err
@@ -739,10 +811,10 @@ func (p *PostGIS) ImportWays(ws []osm.Way) (err error) {
 
 	ndsStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`COPY "%[1]s".nds (
-            way_id,
-            way_version,
-            idx,
-	    node_id) FROM STDIN`, p.schema),
+		way_id,
+		way_version,
+		idx,
+		node_id) FROM STDIN`, p.schema),
 	)
 	if err != nil {
 		return err
@@ -767,6 +839,9 @@ func (p *PostGIS) ImportWays(ws []osm.Way) (err error) {
 
 // ImportRelations inserts all Relations in a single COPY statement.
 func (p *PostGIS) ImportRelations(rs []osm.Relation) (err error) {
+	if p.tx == nil {
+		return errNoTx
+	}
 	_, err = p.tx.Exec("SAVEPOINT insert")
 	if err != nil {
 		return
@@ -781,16 +856,16 @@ func (p *PostGIS) ImportRelations(rs []osm.Relation) (err error) {
 	}()
 	relStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`COPY "%[1]s".relations (
-            id,
-            add,
-            modify,
-            delete,
-            user_name,
-            user_id,
-            timestamp,
-            version,
-            changeset,
-            tags) FROM STDIN`, p.schema),
+		id,
+		add,
+		modify,
+		delete,
+		user_name,
+		user_id,
+		timestamp,
+		version,
+		changeset,
+		tags) FROM STDIN`, p.schema),
 	)
 	if err != nil {
 		return err
@@ -822,15 +897,15 @@ func (p *PostGIS) ImportRelations(rs []osm.Relation) (err error) {
 
 	memberStmt, err := p.tx.Prepare(
 		fmt.Sprintf(`COPY "%[1]s".members (
-            relation_id,
-            relation_version,
-            type,
-            role,
-            idx,
-            member_node_id,
-            member_way_id,
-            member_relation_id
-	    ) FROM STDIN`, p.schema),
+		relation_id,
+		relation_version,
+		type,
+		role,
+		idx,
+		member_node_id,
+		member_way_id,
+		member_relation_id
+		) FROM STDIN`, p.schema),
 	)
 	if err != nil {
 		return err
@@ -840,11 +915,11 @@ func (p *PostGIS) ImportRelations(rs []osm.Relation) (err error) {
 		for i, m := range rel.Members {
 			var nodeID, wayID, relID interface{}
 			switch m.Type {
-			case osm.NODE:
+			case osm.NodeMember:
 				nodeID = m.ID
-			case osm.WAY:
+			case osm.WayMember:
 				wayID = m.ID
-			case osm.RELATION:
+			case osm.RelationMember:
 				relID = m.ID
 			}
 			if _, err = memberStmt.Exec(
@@ -879,6 +954,9 @@ func (p *PostGIS) SaveDiffStatus(sequence int, timestamp time.Time) error {
 }
 
 func (p *PostGIS) saveStatus(statusType string, sequence int, timestamp time.Time) error {
+	if p.tx == nil {
+		return errNoTx
+	}
 	_, err := p.tx.Exec(
 		fmt.Sprintf(
 			`UPDATE "%[1]s".current_status SET sequence = $1, timestamp = $2 WHERE type = '%[2]s'`,
@@ -908,7 +986,17 @@ func (p *PostGIS) readStatus(statusType string) (int, error) {
 	return sequence, err
 }
 
+// ImportChangeset imports a single changeset.
 func (p *PostGIS) ImportChangeset(c osm.Changeset) error {
+	if p.tx == nil {
+		return errNoTx
+	}
+	if !p.stmtsPrepared {
+		if err := p.prepareStmts(); err != nil {
+			p.rollback()
+			return err
+		}
+	}
 	bbox := bboxPolygon(c)
 	if _, err := p.tx.Exec("SAVEPOINT insert_changeset"); err != nil {
 		return err
@@ -996,7 +1084,7 @@ const (
 	wkbPointType = 1
 )
 
-func EWKBHex(nd osm.Node, srid int) ([]byte, error) {
+func ewkbHexPoint(nd osm.Node, srid int) ([]byte, error) {
 	buf := &bytes.Buffer{}
 	binary.Write(buf, binary.LittleEndian, uint8(1)) // little endian
 	if srid != 0 {
