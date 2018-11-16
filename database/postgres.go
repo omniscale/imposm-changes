@@ -71,7 +71,6 @@ CREATE TABLE IF NOT EXISTS "%[1]s".relations (
 	modify BOOLEAN,
 	delete BOOLEAN,
 	changeset INT,
-	geometry GEOMETRY(Point, 4326),
 	user_name VARCHAR,
 	user_id INT,
 	timestamp TIMESTAMP WITH TIME ZONE,
