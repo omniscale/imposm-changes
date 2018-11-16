@@ -241,6 +241,22 @@ func (p *PostGIS) Init() error {
 	return nil
 }
 
+// Truncate clears all tables.
+func (p *PostGIS) Truncate() error {
+	if p.tx == nil {
+		return errNoTx
+	}
+
+	for _, tbl := range []string{"comments", "changesets", "members", "nds", "relations", "ways", "nodes"} {
+		stmt := fmt.Sprintf(`TRUNCATE "%[1]s"."%[2]s" CASCADE`, p.schema, tbl)
+		if _, err := p.tx.Exec(stmt); err != nil {
+			p.rollback()
+			return errors.Wrapf(err, "truncating table %q", tbl)
+		}
+	}
+	return nil
+}
+
 // ResetLastState resets sequences in current_status tables.
 func (p *PostGIS) ResetLastState() error {
 	if p.tx == nil {

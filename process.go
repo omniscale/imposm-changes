@@ -113,11 +113,13 @@ func ImportPBF(config *Config, pbfFilename string) error {
 	if err := db.Init(); err != nil {
 		return errors.Wrap(err, "init postgis changes database")
 	}
+	if err := db.Truncate(); err != nil {
+		return errors.Wrap(err, "truncate postgis changes tables")
+	}
 	if err := db.ResetLastState(); err != nil {
 		return errors.Wrap(err, "reset last state in database")
 	}
 
-	// TODO defer rollback?
 	f, err := os.Open(pbfFilename)
 	if err != nil {
 		return errors.Wrapf(err, "opening diff file %s", pbfFilename)
