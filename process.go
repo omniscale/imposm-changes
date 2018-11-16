@@ -33,7 +33,7 @@ func Run(config *Config) error {
 	if diffSeq <= 0 {
 		diffSeq, err = replDiff.CurrentSequence(config.DiffUrl)
 		if err != nil {
-			errors.Wrapf(err, "unable to read current diff from %s", config.DiffUrl)
+			return errors.Wrapf(err, "unable to read current diff from %s", config.DiffUrl)
 		}
 		diffSeq -= int(config.InitialHistory.Duration/config.DiffInterval.Duration) - 1
 	}
@@ -44,7 +44,7 @@ func Run(config *Config) error {
 	if changeSeq <= 0 {
 		changeSeq, err = replChanges.CurrentSequence(config.ChangesetUrl)
 		if err != nil {
-			errors.Wrapf(err, "unable to read current changeset from %s", config.ChangesetUrl)
+			return errors.Wrapf(err, "unable to read current changeset from %s", config.ChangesetUrl)
 		}
 		changeSeq -= int(config.InitialHistory.Duration/config.ChangesetInterval.Duration) - 1
 	}
@@ -136,6 +136,10 @@ func ImportPBF(config *Config, pbfFilename string) error {
 		IncludeMetadata: true,
 	}
 	parser := pbf.New(f, conf)
+	h, err := parser.Header()
+	if err != nil {
+		return errors.Wrap(err, "parsing PBF header")
+	}
 
 	ctx, stop := context.WithCancel(context.Background())
 	go parser.Parse(ctx)
@@ -211,8 +215,33 @@ func ImportPBF(config *Config, pbfFilename string) error {
 	}
 	log.Printf("[step] created indices in %s", time.Since(start))
 
+	if err := updateSequence(db, h.Time, config); err != nil {
+		log.Println("[error] Unable to collect and save diff/changeset sequence. "+
+			"You need to manually set sequences in current_status tables to prevent missing data:", err)
+	}
 	if err := db.Commit(); err != nil {
 		return errors.Wrapf(err, "committing diff")
+	}
+	return nil
+}
+
+func updateSequence(db *database.PostGIS, since time.Time, config *Config) error {
+	diffSeq, err := replDiff.CurrentSequence(config.DiffUrl)
+	if err != nil {
+		errors.Wrapf(err, "unable to read current diff from %s", config.DiffUrl)
+	}
+	diffSeq -= int((time.Since(since)+config.InitialHistory.Duration)/config.DiffInterval.Duration) - 1
+	if err := db.SaveDiffStatus(diffSeq, since.Add(-config.InitialHistory.Duration)); err != nil {
+		return errors.Wrapf(err, "unable to save current status")
+	}
+
+	changeSeq, err := replChanges.CurrentSequence(config.ChangesetUrl)
+	if err != nil {
+		return errors.Wrapf(err, "unable to read current changeset from %s", config.ChangesetUrl)
+	}
+	changeSeq -= int((time.Since(since)+config.InitialHistory.Duration)/config.ChangesetInterval.Duration) - 1
+	if err := db.SaveChangesetStatus(changeSeq, since.Add(-config.InitialHistory.Duration)); err != nil {
+		return errors.Wrapf(err, "unable to save current status")
 	}
 	return nil
 }
