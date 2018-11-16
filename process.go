@@ -322,10 +322,13 @@ func ImportDiff(db *database.PostGIS, limitTo *LimitTo, seq replication.Sequence
 		if elem.Node != nil && !limitTo.Contains(elem.Node.Long, elem.Node.Lat) {
 			continue
 		}
-		numElements += 1
-		if err := db.ImportElem(elem); err != nil {
+		imported, err := db.ImportElem(elem)
+		if err != nil {
 			stop()
 			return errors.Wrapf(err, "importing %v from %s", elem, seq.Filename)
+		}
+		if imported {
+			numElements += 1
 		}
 	}
 	if err := parser.Error(); err != nil {

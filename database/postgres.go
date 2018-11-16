@@ -513,14 +513,14 @@ func (p *PostGIS) rollback() error {
 // ImportElem imports a single Diff element.
 // Ways and relations are only imported if at least one referenced node (or way) is
 // included in the database. This keeps the database sparse for imports with limitto.
-func (p *PostGIS) ImportElem(elem osm.Diff) (err error) {
+func (p *PostGIS) ImportElem(elem osm.Diff) (imported bool, err error) {
 	if p.tx == nil {
-		return errNoTx
+		return false, errNoTx
 	}
 	if !p.stmtsPrepared {
 		if err := p.prepareStmts(); err != nil {
 			p.rollback()
-			return err
+			return false, err
 		}
 	}
 
@@ -559,8 +559,9 @@ func (p *PostGIS) ImportElem(elem osm.Diff) (err error) {
 			nd.Metadata.Changeset,
 			hstoreString(nd.Tags),
 		); err != nil {
-			return errors.Wrapf(err, "importing node %v", elem.Node)
+			return false, errors.Wrapf(err, "importing node %v", elem.Node)
 		}
+		imported = true
 	} else if elem.Way != nil {
 		w := elem.Way
 		res, err := p.wayLimitStmt.Exec(
@@ -577,9 +578,10 @@ func (p *PostGIS) ImportElem(elem osm.Diff) (err error) {
 			pq.Array(w.Refs),
 		)
 		if err != nil {
-			return errors.Wrapf(err, "importing way %v", elem.Way)
+			return false, errors.Wrapf(err, "importing way %v", elem.Way)
 		}
 		if n, _ := res.RowsAffected(); n == 1 {
+			imported = true
 			for i, ref := range elem.Way.Refs {
 				if _, err = p.ndsStmt.Exec(
 					w.ID,
@@ -587,7 +589,7 @@ func (p *PostGIS) ImportElem(elem osm.Diff) (err error) {
 					i,
 					ref,
 				); err != nil {
-					return errors.Wrapf(err, "importing nds %v of way %v", ref, elem.Way)
+					return false, errors.Wrapf(err, "importing nds %v of way %v", ref, elem.Way)
 				}
 			}
 		}
@@ -623,9 +625,10 @@ func (p *PostGIS) ImportElem(elem osm.Diff) (err error) {
 			pq.Array(relRefs),
 		)
 		if err != nil {
-			return errors.Wrapf(err, "importing relation %v", elem.Rel)
+			return false, errors.Wrapf(err, "importing relation %v", elem.Rel)
 		}
 		if n, _ := res.RowsAffected(); n == 1 {
+			imported = true
 			for i, m := range elem.Rel.Members {
 				var nodeID, wayID, relID interface{}
 				switch m.Type {
@@ -646,13 +649,13 @@ func (p *PostGIS) ImportElem(elem osm.Diff) (err error) {
 					wayID,
 					relID,
 				); err != nil {
-					return errors.Wrapf(err, "importing member %v of relation %v", m, elem.Rel)
+					return false, errors.Wrapf(err, "importing member %v of relation %v", m, elem.Rel)
 				}
 			}
 		}
 	}
 
-	return nil
+	return imported, nil
 }
 
 // ImportNodes inserts all Nodes in a single COPY statement.
