@@ -407,6 +407,18 @@ func ImportChangeset(db *database.PostGIS, limitTo *LimitTo, seq replication.Seq
 
 	numChanges := 0
 	for c := range conf.Changesets {
+		if limitTo != nil {
+		// do no import all changesets if whe have a limitto
+
+		// skip open changesets as maxextent is not set on open changesets
+		if c.Open {
+			continue
+		}
+		// skip empty changesets
+		if c.NumChanges == 0 {
+			continue
+		}
+		// skip changesets outside of limitto
 		if !limitTo.Intersects(c.MaxExtent) {
 			continue
 		}
