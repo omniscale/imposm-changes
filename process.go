@@ -215,9 +215,11 @@ func ImportPBF(config *Config, pbfFilename string) error {
 	}
 	log.Printf("[step] created indices in %s", time.Since(start))
 
-	if err := updateSequence(db, h.Time, config); err != nil {
-		log.Println("[error] Unable to collect and save diff/changeset sequence. "+
-			"You need to manually set sequences in current_status tables to prevent missing data:", err)
+	if !h.Time.IsZero() {
+		if err := updateSequence(db, h.Time, config); err != nil {
+			log.Println("[error] Unable to collect and save diff/changeset sequence. "+
+				"You need to manually set sequences in current_status tables to prevent missing data:", err)
+		}
 	}
 	if err := db.Commit(); err != nil {
 		return errors.Wrapf(err, "committing diff")
