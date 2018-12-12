@@ -29,15 +29,17 @@ type Schemas struct {
 	Changes string `json:"changes"`
 }
 
+var DefaultConfig = Config{
+	InitialHistory:    config.MinutesInterval{Duration: 2 * time.Hour},
+	DiffUrl:           "https://planet.openstreetmap.org/replication/minute/",
+	DiffInterval:      config.MinutesInterval{Duration: time.Minute},
+	ChangesetUrl:      "https://planet.openstreetmap.org/replication/changesets/",
+	ChangesetInterval: config.MinutesInterval{Duration: time.Minute},
+	Schemas:           Schemas{Changes: "changes"},
+}
+
 func LoadConfig(filename string) (*Config, error) {
-	conf := &Config{
-		InitialHistory:    config.MinutesInterval{Duration: time.Hour},
-		DiffUrl:           "https://planet.openstreetmap.org/replication/minute/",
-		DiffInterval:      config.MinutesInterval{Duration: time.Minute},
-		ChangesetUrl:      "https://planet.openstreetmap.org/replication/changesets/",
-		ChangesetInterval: config.MinutesInterval{Duration: time.Minute},
-		Schemas:           Schemas{Changes: "changes"},
-	}
+	conf := Config(DefaultConfig)
 
 	f, err := os.Open(filename)
 	if err != nil {
@@ -62,5 +64,5 @@ func LoadConfig(filename string) (*Config, error) {
 		return nil, errors.New("missing changesdir option")
 	}
 
-	return conf, nil
+	return &conf, nil
 }

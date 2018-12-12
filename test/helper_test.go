@@ -48,12 +48,12 @@ func (s *testSuite) db(t *testing.T) *database.PostGIS {
 }
 
 func (s *testSuite) importPBF(t *testing.T, filename string) {
-	conf := &changes.Config{
-		Connection: s.config.connection,
-		LimitTo:    s.config.limitTo,
-		Schemas:    changes.Schemas{Changes: s.dbschemaImport()},
-	}
-	if err := changes.ImportPBF(conf, filename); err != nil {
+	conf := changes.DefaultConfig
+	conf.Connection = s.config.connection
+	conf.LimitTo = s.config.limitTo
+	conf.Schemas = changes.Schemas{Changes: s.dbschemaImport()}
+
+	if err := changes.ImportPBF(&conf, filename); err != nil {
 		t.Fatal(err)
 	}
 }
