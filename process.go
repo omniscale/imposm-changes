@@ -80,11 +80,19 @@ func Run(config *Config) error {
 	for {
 		select {
 		case seq := <-nextDiff:
+			if seq.Error != nil {
+				log.Printf("[error] fetching diff: %v", seq.Error)
+				continue
+			}
 			if err := ImportDiff(db, config.LimitTo, seq); err != nil {
 				return err
 			}
 			lastImport = time.Now()
 		case seq := <-nextChange:
+			if seq.Error != nil {
+				log.Printf("[error] fetching changeset: %v", seq.Error)
+				continue
+			}
 			if err := ImportChangeset(db, config.LimitTo, seq); err != nil {
 				return err
 			}
@@ -392,7 +400,7 @@ func ImportChangeset(db *database.PostGIS, limitTo *LimitTo, seq replication.Seq
 
 	f, err := os.Open(seq.Filename)
 	if err != nil {
-		return errors.Wrapf(err, "opening changeset file %s", seq.Filename)
+		return errors.Wrapf(err, "opening changeset file %q", seq.Filename)
 	}
 	defer f.Close()
 
