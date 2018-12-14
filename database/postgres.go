@@ -138,6 +138,13 @@ var initIndexSql = []struct {
 
 	// node_id to get ways affected by a node change
 	{"nds_node_idx", `CREATE INDEX "%[2]s" ON "%[1]s".nds USING btree (node_id);`},
+
+	// member ids to get relations affected by a change
+	{"members_member_node_id_idx", `CREATE INDEX "%[2]s" ON "%[1]s".members USING btree (member_node_id) WHERE member_node_id IS NOT NULL;`},
+	{"members_member_way_id_idx", `CREATE INDEX "%[2]s" ON "%[1]s".members USING btree (member_way_id) WHERE member_way_id IS NOT NULL;`},
+	{"members_member_relation_id_idx", `CREATE INDEX "%[2]s" ON "%[1]s".members USING btree (member_relation_id) WHERE member_relation_id IS NOT NULL;`},
+
+	{"changesets_closed_at_idx", `CREATE INDEX "%[2]s" ON "%[1]s".changesets USING btree (closed_at);`},
 }
 
 var errNoTx = errors.New("no open transaction")
