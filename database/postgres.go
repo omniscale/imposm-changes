@@ -371,9 +371,19 @@ func (p *PostGIS) prepareStmts() (err error) {
 		changeset,
 		tags
 	) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-	WHERE EXISTS (
-		SELECT 1 FROM "%[1]s".nodes WHERE id = ANY ($11)
+	-- only import if...
+	WHERE (
+		-- either we store at least one child node
+		EXISTS (
+			SELECT 1 FROM "%[1]s".nodes WHERE id = ANY ($11)
+		)
+		-- or if we store the previous version (a delete does not contain nds,
+		-- so EXISTS above always fails, but we do need to record removed ways)
+		OR EXISTS (
+			SELECT 1 FROM "%[1]s".ways WHERE id = $1 AND version = $8 - 1
+		)
 	)
+	-- but not if it is already imported (for overlaps between initial import and first diff files)
 	AND NOT EXISTS (
 		SELECT 1 FROM "%[1]s".ways WHERE id = $1 AND version = $8
 	)
@@ -410,11 +420,18 @@ func (p *PostGIS) prepareStmts() (err error) {
 		changeset,
 		tags
 	) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+	-- only import if...
 	WHERE (
+		-- we store at least one child node/way/relation
 		EXISTS (SELECT 1 FROM "%[1]s".ways WHERE id = ANY($11) LIMIT 1)
 	 OR EXISTS (SELECT 1 FROM "%[1]s".nodes WHERE id = ANY($12) LIMIT 1)
 	 OR EXISTS (SELECT 1 FROM "%[1]s".relations WHERE id = ANY($13) LIMIT 1)
-	) AND NOT EXISTS (
+	-- or if we store the previous version (a delete does not contain members,
+	-- so EXISTS above always fail, but we do need to record removed relations)
+     OR EXISTS (SELECT 1 FROM "%[1]s".relations WHERE id = $1 AND version = $8 - 1)
+	)
+	-- but not if it is already imported (for overlaps between initial import and first diff files)
+	AND NOT EXISTS (
 		SELECT 1 FROM "%[1]s".relations WHERE id = $1 AND version = $8
 	)
 	`, p.schema),
@@ -602,6 +619,8 @@ func (p *PostGIS) ImportElem(elem osm.Diff) (imported bool, err error) {
 		if err != nil {
 			return false, errors.Wrapf(err, "importing way %v", elem.Way)
 		}
+		fmt.Print(w.ID, add, mod, del, w.Metadata.Version)
+		fmt.Println(res.RowsAffected())
 		if n, _ := res.RowsAffected(); n == 1 {
 			imported = true
 			for i, ref := range elem.Way.Refs {

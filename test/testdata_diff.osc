@@ -73,4 +73,8 @@
       <member type="relation" role="meta" ref="30070"/>
     </relation>
   </create>
+
+  <delete>
+    <way id="23050" version="2" timestamp="2017-05-03T14:00:00Z" uid="23080" user="User23080" changeset="23091" />
+  </delete>
 </osmChange>

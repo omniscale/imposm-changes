@@ -191,43 +191,50 @@ func (s *testSuite) assertMissingWay(t *testing.T, id int) {
 	}
 }
 
-func (s *testSuite) assertWay(t *testing.T, want osm.Way) {
+func (s *testSuite) assertWay(t *testing.T, wants ...osm.Way) {
 	t.Helper()
-	rows, err := s.sql.Query(fmt.Sprintf(`SELECT id, version, timestamp, user_id, user_name, changeset, tags FROM "%s".ways WHERE id=$1`, s.dbschemaProduction()), want.ID)
+	rows, err := s.sql.Query(
+		fmt.Sprintf(
+			`SELECT id, version, timestamp, user_id, user_name, changeset, tags FROM "%s".ways WHERE id=$1 order by version`,
+			s.dbschemaProduction()),
+		wants[0].ID,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rows.Next() {
-		t.Errorf("did not found way %#v", want)
-		return
-	}
-	h := hstore.Hstore{}
-	got := osm.Way{Element: osm.Element{Metadata: &osm.Metadata{}}}
-	if err := rows.Scan(
-		&got.ID,
-		&got.Metadata.Version,
-		&got.Metadata.Timestamp,
-		&got.Metadata.UserID,
-		&got.Metadata.UserName,
-		&got.Metadata.Changeset,
-		&h,
-	); err != nil {
-		t.Fatal(err)
-	}
-	got.Tags = hstoreTags(h)
-	got.Metadata.Timestamp = got.Metadata.Timestamp.UTC() // convert from +0 to UTC for DeepEqual
+	for _, want := range wants {
+		if !rows.Next() {
+			t.Errorf("did not found way %#v", want)
+			return
+		}
+		h := hstore.Hstore{}
+		got := osm.Way{Element: osm.Element{Metadata: &osm.Metadata{}}}
+		if err := rows.Scan(
+			&got.ID,
+			&got.Metadata.Version,
+			&got.Metadata.Timestamp,
+			&got.Metadata.UserID,
+			&got.Metadata.UserName,
+			&got.Metadata.Changeset,
+			&h,
+		); err != nil {
+			t.Fatal(err)
+		}
+		got.Tags = hstoreTags(h)
+		got.Metadata.Timestamp = got.Metadata.Timestamp.UTC() // convert from +0 to UTC for DeepEqual
 
-	if want.Metadata == nil {
-		// do not compare metadata
-		got.Metadata = nil
-	}
+		if want.Metadata == nil {
+			// do not compare metadata
+			got.Metadata = nil
+		}
 
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("unexpected result want:\n%# v\ngot:\n%# v\ndiffs:\n\t%s",
-			pretty.Formatter(want),
-			pretty.Formatter(got),
-			strings.Join(pretty.Diff(want, got), "\n\t"),
-		)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("unexpected result want:\n%# v\ngot:\n%# v\ndiffs:\n\t%s",
+				pretty.Formatter(want),
+				pretty.Formatter(got),
+				strings.Join(pretty.Diff(want, got), "\n\t"),
+			)
+		}
 	}
 }
 

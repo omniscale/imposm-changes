@@ -225,6 +225,36 @@ func TestComplete(t *testing.T) {
 		ts.assertRelation(t, osm.Relation{Element: osm.Element{ID: 30071, Metadata: nil}})
 	})
 
+	t.Run("Deleted way", func(t *testing.T) {
+		ts.assertWay(t,
+			osm.Way{
+				Element: osm.Element{
+					ID:   23050,
+					Tags: osm.Tags{"highway": "primary"},
+					Metadata: &osm.Metadata{
+						UserID:    23080,
+						UserName:  "User23080",
+						Version:   1,
+						Timestamp: time.Date(2017, 5, 2, 14, 0, 0, 0, time.UTC),
+						Changeset: 23090,
+					},
+				},
+			},
+			osm.Way{
+				Element: osm.Element{
+					ID:   23050,
+					Tags: nil,
+					Metadata: &osm.Metadata{
+						UserID:    23080,
+						UserName:  "User23080",
+						Version:   2,
+						Timestamp: time.Date(2017, 5, 3, 14, 0, 0, 0, time.UTC),
+						Changeset: 23091,
+					},
+				},
+			})
+	})
+
 	t.Run("Import Changesets", func(t *testing.T) {
 		ts.assertMissingChangeset(t, 90090)
 		ts.importChangeset(t, replication.Sequence{Time: time.Now(), Filename: "build/testdata_changes.osm.gz"})

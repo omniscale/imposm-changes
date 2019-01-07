@@ -104,4 +104,13 @@ The test file uses the following ID schema:
     <member type="way" role="stop" ref="22050"/>
   </relation>
 
+  <!-- diff deletes way -->
+  <node id="23000" version="1" timestamp="2017-05-02T14:00:00Z" uid="23080" user="User23080" changeset="23090" lat="-43.0" lon="7.0"/>
+  <node id="23001" version="1" timestamp="2017-05-02T14:00:00Z" uid="23080" user="User23080" changeset="23090" lat="43.0" lon="7.0"/>
+  <way id="23050" version="1" timestamp="2017-05-02T14:00:00Z" uid="23080" user="User23080" changeset="23090">
+    <nd ref="23000"/>
+    <nd ref="23001"/>
+    <tag k="highway" v="primary"/>
+  </way>
+
 </osm>
