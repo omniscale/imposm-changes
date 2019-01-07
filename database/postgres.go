@@ -619,8 +619,6 @@ func (p *PostGIS) ImportElem(elem osm.Diff) (imported bool, err error) {
 		if err != nil {
 			return false, errors.Wrapf(err, "importing way %v", elem.Way)
 		}
-		fmt.Print(w.ID, add, mod, del, w.Metadata.Version)
-		fmt.Println(res.RowsAffected())
 		if n, _ := res.RowsAffected(); n == 1 {
 			imported = true
 			for i, ref := range elem.Way.Refs {
