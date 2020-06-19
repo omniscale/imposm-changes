@@ -3,7 +3,9 @@ Imposm-Changes
 
 Imposm-Changes imports OpenStreetMap changeset information and metadata into a PostgreSQL/PostGIS database.
 
-The resulting database can be used to build change monitoring and QA applications.
+The resulting database can be used to build change monitoring and QA
+applications. [OSM Observer](https://github.com/omniscale/osm-observer) is such
+an application.
 
 Uses an limitations
 -------------------
